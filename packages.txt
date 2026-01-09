@@ -1,0 +1,5 @@
+# System packages required by the application
+# This file is used by Streamlit Cloud to install system dependencies
+
+# FFmpeg for audio processing (used by pydub)
+ffmpeg
