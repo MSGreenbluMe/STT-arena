@@ -6,6 +6,7 @@ Handles API integrations for multiple STT providers and Gemini-based Golden Tran
 import os
 import time
 import requests
+import mimetypes
 from typing import Dict, List, Optional, Tuple
 import google.generativeai as genai
 from jiwer import wer
@@ -44,21 +45,23 @@ class ElevenLabsSTT(STTProvider):
                 "xi-api-key": self.api_key
             }
 
-            with open(audio_file_path, 'rb') as audio_file:
-                files = {'file': audio_file}
-                data = {
-                    'model_id': 'scribe_v2',
-                    'diarize': 'true',
-                    'tag_audio_events': 'true'
-                }
+            with open(audio_file_path, 'rb') as f:
+                audio_data = f.read()
 
-                response = requests.post(
-                    self.base_url,
-                    headers=headers,
-                    files=files,
-                    data=data,
-                    timeout=600  # 10 minutes for long files
-                )
+            files = {'file': ('audio.mp3', audio_data, 'audio/mpeg')}
+            data = {
+                'model_id': 'scribe_v2',
+                'diarize': 'true',
+                'tag_audio_events': 'true'
+            }
+
+            response = requests.post(
+                self.base_url,
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=600  # 10 minutes for long files
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -104,15 +107,19 @@ class GladiaSTT(STTProvider):
                 "x-gladia-key": self.api_key
             }
 
-            # Step 1: Upload audio file (only file, no other params)
-            with open(audio_file_path, 'rb') as audio_file:
-                files = {'audio': audio_file}
-                upload_response = requests.post(
-                    self.upload_url,
-                    headers=headers,
-                    files=files,
-                    timeout=600
-                )
+            # Step 1: Upload audio file
+            with open(audio_file_path, 'rb') as f:
+                audio_data = f.read()
+
+            # Prepare file with proper format
+            files = {'audio': ('audio_file.mp3', audio_data)}
+
+            upload_response = requests.post(
+                self.upload_url,
+                headers=headers,
+                files=files,
+                timeout=600
+            )
 
             if upload_response.status_code not in [200, 201]:
                 self.error = f"Upload Error: {upload_response.status_code} - {upload_response.text}"
@@ -186,21 +193,23 @@ class OpenAIWhisperSTT(STTProvider):
                 "Authorization": f"Bearer {self.api_key}"
             }
 
-            with open(audio_file_path, 'rb') as audio_file:
-                files = {'file': audio_file}
-                data = {
-                    'model': 'whisper-1',
-                    'response_format': 'verbose_json',
-                    'timestamp_granularities': ['word']
-                }
+            with open(audio_file_path, 'rb') as f:
+                audio_data = f.read()
 
-                response = requests.post(
-                    self.base_url,
-                    headers=headers,
-                    files=files,
-                    data=data,
-                    timeout=600
-                )
+            files = {'file': ('audio.mp3', audio_data)}
+            data = {
+                'model': 'whisper-1',
+                'response_format': 'verbose_json',
+                'timestamp_granularities': ['word']
+            }
+
+            response = requests.post(
+                self.base_url,
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=600
+            )
 
             if response.status_code == 200:
                 result = response.json()
@@ -244,20 +253,22 @@ class BehavioralSignalsSTT(STTProvider):
                 "X-Auth-Token": self.api_key
             }
 
-            with open(audio_file_path, 'rb') as audio_file:
-                files = {'file': audio_file}
-                data = {
-                    'name': 'stt-arena-audio',
-                    'predictionmode': 'full'
-                }
+            with open(audio_file_path, 'rb') as f:
+                audio_data = f.read()
 
-                response = requests.post(
-                    self.api_url,
-                    headers=headers,
-                    files=files,
-                    data=data,
-                    timeout=600
-                )
+            files = {'file': ('audio.wav', audio_data)}
+            data = {
+                'name': 'stt-arena-audio',
+                'predictionmode': 'full'
+            }
+
+            response = requests.post(
+                self.api_url,
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=600
+            )
 
             if response.status_code in [200, 201]:
                 result = response.json()
@@ -298,8 +309,23 @@ class DeepgramSTT(STTProvider):
         start_time = time.time()
 
         try:
+            # Detect correct Content-Type from file extension
+            mime_type, _ = mimetypes.guess_type(audio_file_path)
+            if not mime_type or not mime_type.startswith('audio'):
+                # Fallback to common audio types
+                ext = os.path.splitext(audio_file_path)[1].lower()
+                mime_map = {
+                    '.mp3': 'audio/mpeg',
+                    '.wav': 'audio/wav',
+                    '.m4a': 'audio/mp4',
+                    '.ogg': 'audio/ogg',
+                    '.flac': 'audio/flac'
+                }
+                mime_type = mime_map.get(ext, 'application/octet-stream')
+
             headers = {
-                "Authorization": f"Token {self.api_key}"
+                "Authorization": f"Token {self.api_key}",
+                "Content-Type": mime_type
             }
 
             params = {
@@ -311,11 +337,12 @@ class DeepgramSTT(STTProvider):
             }
 
             with open(audio_file_path, 'rb') as audio_file:
+                audio_data = audio_file.read()
                 response = requests.post(
                     self.base_url,
                     headers=headers,
                     params=params,
-                    data=audio_file,
+                    data=audio_data,
                     timeout=600
                 )
 
