@@ -108,18 +108,15 @@ class GladiaSTT(STTProvider):
             }
 
             # Step 1: Upload audio file
-            with open(audio_file_path, 'rb') as f:
-                audio_data = f.read()
+            with open(audio_file_path, 'rb') as audio_file:
+                files = {'audio': (os.path.basename(audio_file_path), audio_file, 'audio/mpeg')}
 
-            # Prepare file with proper format
-            files = {'audio': ('audio_file.mp3', audio_data)}
-
-            upload_response = requests.post(
-                self.upload_url,
-                headers=headers,
-                files=files,
-                timeout=600
-            )
+                upload_response = requests.post(
+                    self.upload_url,
+                    headers=headers,
+                    files=files,
+                    timeout=600
+                )
 
             if upload_response.status_code not in [200, 201]:
                 self.error = f"Upload Error: {upload_response.status_code} - {upload_response.text}"
@@ -333,7 +330,7 @@ class DeepgramSTT(STTProvider):
                 'diarize': 'true',
                 'utterances': 'true',
                 'smart_format': 'true',
-                'model': 'nova-2'
+                'model': 'whisper-large'  # 20 min processing time vs 10 min for nova-2
             }
 
             with open(audio_file_path, 'rb') as audio_file:
