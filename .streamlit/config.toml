@@ -1,0 +1,21 @@
+[server]
+# Maximum file upload size in MB (500 MB for large audio files)
+maxUploadSize = 500
+
+# Enable CORS for development
+enableCORS = false
+
+# Enable XSS protection
+enableXsrfProtection = true
+
+[browser]
+# Automatically open browser on start
+gatherUsageStats = false
+
+[theme]
+# Optional: Custom theme
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+font = "sans serif"
