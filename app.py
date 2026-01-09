@@ -94,43 +94,44 @@ def sidebar_config():
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔑 API Keys")
 
-    # API Key inputs (with .env fallback)
+    # API Key inputs (with environment variable fallback)
+    # Try multiple environment variable names for compatibility
     api_keys = {}
 
     api_keys['gemini'] = st.sidebar.text_input(
         "Google Gemini API Key",
-        value=os.getenv('GEMINI_API_KEY', ''),
+        value=os.getenv('GEMINI_API_KEY', os.getenv('gemini', '')),
         type="password",
         help="Required for Golden Transcript generation"
     )
 
     api_keys['gladia'] = st.sidebar.text_input(
         "Gladia API Key",
-        value=os.getenv('GLADIA_API_KEY', ''),
+        value=os.getenv('GLADIA_API_KEY', os.getenv('gladia', '')),
         type="password"
     )
 
     api_keys['openai'] = st.sidebar.text_input(
         "OpenAI API Key",
-        value=os.getenv('OPENAI_API_KEY', ''),
+        value=os.getenv('OPENAI_API_KEY', os.getenv('openai', '')),
         type="password"
     )
 
     api_keys['behavioral'] = st.sidebar.text_input(
         "Behavioral Signals API Key",
-        value=os.getenv('BEHAVIORAL_SIGNALS_API_KEY', ''),
+        value=os.getenv('BEHAVIORAL_SIGNALS_API_KEY', os.getenv('Behavioral signals', '')),
         type="password"
     )
 
     api_keys['behavioral_url'] = st.sidebar.text_input(
         "Behavioral Signals URL",
-        value=os.getenv('BEHAVIORAL_SIGNALS_URL', ''),
+        value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v1/transcribe'),
         help="API endpoint for Behavioral Signals"
     )
 
     api_keys['deepgram'] = st.sidebar.text_input(
         "Deepgram API Key",
-        value=os.getenv('DEEPGRAM_API_KEY', ''),
+        value=os.getenv('DEEPGRAM_API_KEY', os.getenv('Deepgram', '')),
         type="password"
     )
 
