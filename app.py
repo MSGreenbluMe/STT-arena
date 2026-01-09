@@ -285,7 +285,7 @@ def main():
             metrics_data = []
             for provider, result in st.session_state.transcription_results.items():
                 if result.get('success'):
-                    wer_score = st.session_state.wer_scores.get(provider, 'N/A')
+                    wer_score = st.session_state.wer_scores.get(provider, 'N/A') if st.session_state.wer_scores else 'N/A'
                     wer_display = f"{wer_score}%" if wer_score != 'N/A' and wer_score is not None else 'N/A'
 
                     metrics_data.append({
@@ -323,7 +323,7 @@ def main():
                         st.markdown('</div>', unsafe_allow_html=True)
 
                         # WER Score
-                        wer_score = st.session_state.wer_scores.get(provider, 'N/A')
+                        wer_score = st.session_state.wer_scores.get(provider, 'N/A') if st.session_state.wer_scores else 'N/A'
                         if wer_score != 'N/A' and wer_score is not None:
                             st.metric("Word Error Rate", f"{wer_score}%")
 
@@ -363,7 +363,7 @@ def main():
                             all_transcripts += f"\n{provider.upper()}:\n"
                             all_transcripts += "-" * 60 + "\n"
                             all_transcripts += result.get('transcript', '') + "\n"
-                            wer = st.session_state.wer_scores.get(provider, 'N/A')
+                            wer = st.session_state.wer_scores.get(provider, 'N/A') if st.session_state.wer_scores else 'N/A'
                             all_transcripts += f"WER: {wer}%\n" if wer != 'N/A' else "WER: N/A\n"
 
                     st.download_button(
