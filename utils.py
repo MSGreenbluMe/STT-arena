@@ -28,6 +28,65 @@ class STTProvider:
         raise NotImplementedError
 
 
+class ElevenLabsSTT(STTProvider):
+    """ElevenLabs Speech-to-Text Provider"""
+
+    def __init__(self, api_key: str):
+        super().__init__("ElevenLabs", api_key)
+        self.base_url = "https://api.elevenlabs.io/v1/speech-to-text"
+
+    def transcribe(self, audio_file_path: str) -> Dict:
+        """Transcribe audio using ElevenLabs Scribe API"""
+        start_time = time.time()
+
+        try:
+            headers = {
+                "xi-api-key": self.api_key
+            }
+
+            with open(audio_file_path, 'rb') as audio_file:
+                files = {'file': audio_file}
+                data = {
+                    'model_id': 'scribe_v2',
+                    'diarize': 'true',
+                    'tag_audio_events': 'true'
+                }
+
+                response = requests.post(
+                    self.base_url,
+                    headers=headers,
+                    files=files,
+                    data=data,
+                    timeout=600  # 10 minutes for long files
+                )
+
+            if response.status_code == 200:
+                result = response.json()
+                self.transcript = result.get('text', '')
+                self.metadata = {
+                    'language': result.get('language_code', 'unknown'),
+                    'confidence': result.get('language_probability', 0),
+                    'words': result.get('words', []),
+                    'transcription_id': result.get('transcription_id', '')
+                }
+                self.processing_time = time.time() - start_time
+
+                return {
+                    'success': True,
+                    'transcript': self.transcript,
+                    'metadata': self.metadata,
+                    'processing_time': self.processing_time
+                }
+            else:
+                self.error = f"API Error: {response.status_code} - {response.text}"
+                return {'success': False, 'error': self.error}
+
+        except Exception as e:
+            self.error = str(e)
+            self.processing_time = time.time() - start_time
+            return {'success': False, 'error': self.error}
+
+
 class GladiaSTT(STTProvider):
     """Gladia STT Provider"""
 
@@ -42,20 +101,20 @@ class GladiaSTT(STTProvider):
 
         try:
             headers = {
-                "x-gladia-key": self.api_key,
+                "x-gladia-key": self.api_key
             }
 
-            # Step 1: Upload audio file
+            # Step 1: Upload audio file (only file, no other params)
             with open(audio_file_path, 'rb') as audio_file:
                 files = {'audio': audio_file}
                 upload_response = requests.post(
                     self.upload_url,
                     headers=headers,
                     files=files,
-                    timeout=300
+                    timeout=600
                 )
 
-            if upload_response.status_code != 200 and upload_response.status_code != 201:
+            if upload_response.status_code not in [200, 201]:
                 self.error = f"Upload Error: {upload_response.status_code} - {upload_response.text}"
                 return {'success': False, 'error': self.error}
 
@@ -70,42 +129,40 @@ class GladiaSTT(STTProvider):
             transcribe_payload = {
                 "audio_url": audio_url,
                 "diarization": True,
-                "language_behaviour": "automatic single language"
+                "enable_code_switching": True
             }
 
             transcribe_response = requests.post(
                 self.transcribe_url,
                 headers={**headers, "Content-Type": "application/json"},
                 json=transcribe_payload,
-                timeout=300
+                timeout=600
             )
 
-            if transcribe_response.status_code == 200 or transcribe_response.status_code == 201:
-                result = transcribe_response.json()
-
-                # Extract transcript text
-                if 'result' in result and 'transcription' in result['result']:
-                    self.transcript = result['result']['transcription'].get('full_transcript', '')
-                    self.metadata = {
-                        'diarization': result['result']['transcription'].get('utterances', []),
-                        'language': result['result']['transcription'].get('language', 'unknown'),
-                        'confidence': result['result']['transcription'].get('confidence', 0)
-                    }
-                else:
-                    self.transcript = result.get('transcription', {}).get('full_transcript', '')
-                    self.metadata = result
-
-                self.processing_time = time.time() - start_time
-
-                return {
-                    'success': True,
-                    'transcript': self.transcript,
-                    'metadata': self.metadata,
-                    'processing_time': self.processing_time
-                }
-            else:
+            if transcribe_response.status_code not in [200, 201]:
                 self.error = f"Transcription Error: {transcribe_response.status_code} - {transcribe_response.text}"
                 return {'success': False, 'error': self.error}
+
+            result = transcribe_response.json()
+
+            # Extract transcript (Gladia v2 returns in result.transcription)
+            transcription_data = result.get('result', {}).get('transcription', {})
+            self.transcript = transcription_data.get('full_transcript', '')
+
+            self.metadata = {
+                'diarization': transcription_data.get('utterances', []),
+                'language': transcription_data.get('language', 'unknown'),
+                'confidence': transcription_data.get('confidence', 0)
+            }
+
+            self.processing_time = time.time() - start_time
+
+            return {
+                'success': True,
+                'transcript': self.transcript,
+                'metadata': self.metadata,
+                'processing_time': self.processing_time
+            }
 
         except Exception as e:
             self.error = str(e)
@@ -142,7 +199,7 @@ class OpenAIWhisperSTT(STTProvider):
                     headers=headers,
                     files=files,
                     data=data,
-                    timeout=300
+                    timeout=600
                 )
 
             if response.status_code == 200:
@@ -176,7 +233,6 @@ class BehavioralSignalsSTT(STTProvider):
 
     def __init__(self, api_key: str, api_url: str):
         super().__init__("Behavioral Signals", api_key)
-        # URL should be: https://api.behavioralsignals.com/v5/clients/<project-id>/process/audio
         self.api_url = api_url if api_url else "https://api.behavioralsignals.com/v5/process/audio"
 
     def transcribe(self, audio_file_path: str) -> Dict:
@@ -188,12 +244,11 @@ class BehavioralSignalsSTT(STTProvider):
                 "X-Auth-Token": self.api_key
             }
 
-            # Submit audio file with multipart/form-data
             with open(audio_file_path, 'rb') as audio_file:
                 files = {'file': audio_file}
                 data = {
                     'name': 'stt-arena-audio',
-                    'predictionmode': 'full'  # ASR + Oliver (emotion analysis)
+                    'predictionmode': 'full'
                 }
 
                 response = requests.post(
@@ -201,13 +256,11 @@ class BehavioralSignalsSTT(STTProvider):
                     headers=headers,
                     files=files,
                     data=data,
-                    timeout=300
+                    timeout=600
                 )
 
-            if response.status_code == 200 or response.status_code == 201:
+            if response.status_code in [200, 201]:
                 result = response.json()
-
-                # Extract transcript and emotion data
                 self.transcript = result.get('transcript', result.get('text', ''))
                 self.metadata = {
                     'emotion': result.get('emotion', {}),
@@ -246,15 +299,15 @@ class DeepgramSTT(STTProvider):
 
         try:
             headers = {
-                "Authorization": f"Token {self.api_key}",
-                "Content-Type": "audio/wav"
+                "Authorization": f"Token {self.api_key}"
             }
 
             params = {
                 'punctuate': 'true',
                 'diarize': 'true',
                 'utterances': 'true',
-                'smart_format': 'true'
+                'smart_format': 'true',
+                'model': 'nova-2'
             }
 
             with open(audio_file_path, 'rb') as audio_file:
@@ -263,7 +316,7 @@ class DeepgramSTT(STTProvider):
                     headers=headers,
                     params=params,
                     data=audio_file,
-                    timeout=300
+                    timeout=600
                 )
 
             if response.status_code == 200:
@@ -304,7 +357,8 @@ class GeminiGoldenTranscript:
 
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        # Use gemini-1.5-flash for stability (gemini-2.5-flash may not be available yet)
+        self.model = genai.GenerativeModel('gemini-1.5-flash')
 
     def generate_golden_transcript(self, transcripts: Dict[str, str]) -> Tuple[str, Dict]:
         """
@@ -419,6 +473,11 @@ def transcribe_with_all_providers(
         Dictionary of provider results
     """
     results = {}
+
+    # ElevenLabs
+    if enabled_providers.get('elevenlabs', False) and api_keys.get('elevenlabs'):
+        elevenlabs = ElevenLabsSTT(api_keys['elevenlabs'])
+        results['ElevenLabs'] = elevenlabs.transcribe(audio_file_path)
 
     # Gladia
     if enabled_providers.get('gladia', False) and api_keys.get('gladia'):

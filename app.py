@@ -105,6 +105,12 @@ def sidebar_config():
         help="Required for Golden Transcript generation"
     )
 
+    api_keys['elevenlabs'] = st.sidebar.text_input(
+        "ElevenLabs API Key",
+        value=os.getenv('ELEVENLABS_API_KEY', os.getenv('elevenlabs', '')),
+        type="password"
+    )
+
     api_keys['gladia'] = st.sidebar.text_input(
         "Gladia API Key",
         value=os.getenv('GLADIA_API_KEY', os.getenv('gladia', '')),
@@ -140,6 +146,11 @@ def sidebar_config():
 
     # Provider selection
     enabled_providers = {}
+    enabled_providers['elevenlabs'] = st.sidebar.checkbox(
+        "ElevenLabs",
+        value=bool(api_keys['elevenlabs']),
+        disabled=not bool(api_keys['elevenlabs'])
+    )
     enabled_providers['gladia'] = st.sidebar.checkbox(
         "Gladia",
         value=bool(api_keys['gladia']),
