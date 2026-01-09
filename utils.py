@@ -33,10 +33,11 @@ class GladiaSTT(STTProvider):
 
     def __init__(self, api_key: str):
         super().__init__("Gladia", api_key)
-        self.base_url = "https://api.gladia.io/v2/transcription"
+        self.upload_url = "https://api.gladia.io/v2/upload"
+        self.transcribe_url = "https://api.gladia.io/v2/pre-recorded"
 
     def transcribe(self, audio_file_path: str) -> Dict:
-        """Transcribe audio using Gladia API"""
+        """Transcribe audio using Gladia API (2-step: upload + transcribe)"""
         start_time = time.time()
 
         try:
@@ -44,24 +45,43 @@ class GladiaSTT(STTProvider):
                 "x-gladia-key": self.api_key,
             }
 
-            # Upload audio file
+            # Step 1: Upload audio file
             with open(audio_file_path, 'rb') as audio_file:
                 files = {'audio': audio_file}
-                data = {
-                    'toggle_diarization': True,
-                    'language_behaviour': 'automatic single language'
-                }
-
-                response = requests.post(
-                    self.base_url,
+                upload_response = requests.post(
+                    self.upload_url,
                     headers=headers,
                     files=files,
-                    data=data,
                     timeout=300
                 )
 
-            if response.status_code == 200 or response.status_code == 201:
-                result = response.json()
+            if upload_response.status_code != 200 and upload_response.status_code != 201:
+                self.error = f"Upload Error: {upload_response.status_code} - {upload_response.text}"
+                return {'success': False, 'error': self.error}
+
+            upload_result = upload_response.json()
+            audio_url = upload_result.get('audio_url')
+
+            if not audio_url:
+                self.error = "No audio_url returned from upload"
+                return {'success': False, 'error': self.error}
+
+            # Step 2: Request transcription
+            transcribe_payload = {
+                "audio_url": audio_url,
+                "diarization": True,
+                "language_behaviour": "automatic single language"
+            }
+
+            transcribe_response = requests.post(
+                self.transcribe_url,
+                headers={**headers, "Content-Type": "application/json"},
+                json=transcribe_payload,
+                timeout=300
+            )
+
+            if transcribe_response.status_code == 200 or transcribe_response.status_code == 201:
+                result = transcribe_response.json()
 
                 # Extract transcript text
                 if 'result' in result and 'transcription' in result['result']:
@@ -72,7 +92,7 @@ class GladiaSTT(STTProvider):
                         'confidence': result['result']['transcription'].get('confidence', 0)
                     }
                 else:
-                    self.transcript = result.get('transcription', {}).get('text', '')
+                    self.transcript = result.get('transcription', {}).get('full_transcript', '')
                     self.metadata = result
 
                 self.processing_time = time.time() - start_time
@@ -84,7 +104,7 @@ class GladiaSTT(STTProvider):
                     'processing_time': self.processing_time
                 }
             else:
-                self.error = f"API Error: {response.status_code} - {response.text}"
+                self.error = f"Transcription Error: {transcribe_response.status_code} - {transcribe_response.text}"
                 return {'success': False, 'error': self.error}
 
         except Exception as e:
@@ -156,31 +176,35 @@ class BehavioralSignalsSTT(STTProvider):
 
     def __init__(self, api_key: str, api_url: str):
         super().__init__("Behavioral Signals", api_key)
-        self.api_url = api_url
+        # URL should be: https://api.behavioralsignals.com/v5/clients/<project-id>/process/audio
+        self.api_url = api_url if api_url else "https://api.behavioralsignals.com/v5/process/audio"
 
     def transcribe(self, audio_file_path: str) -> Dict:
-        """Transcribe audio using Behavioral Signals API"""
+        """Transcribe audio using Behavioral Signals Oliver API"""
         start_time = time.time()
 
         try:
             headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+                "X-Auth-Token": self.api_key
             }
 
-            # Note: This is a placeholder implementation
-            # You'll need to adjust based on actual Behavioral Signals API documentation
+            # Submit audio file with multipart/form-data
             with open(audio_file_path, 'rb') as audio_file:
-                files = {'audio': audio_file}
+                files = {'file': audio_file}
+                data = {
+                    'name': 'stt-arena-audio',
+                    'predictionmode': 'full'  # ASR + Oliver (emotion analysis)
+                }
 
                 response = requests.post(
                     self.api_url,
                     headers=headers,
                     files=files,
+                    data=data,
                     timeout=300
                 )
 
-            if response.status_code == 200:
+            if response.status_code == 200 or response.status_code == 201:
                 result = response.json()
 
                 # Extract transcript and emotion data
@@ -280,7 +304,7 @@ class GeminiGoldenTranscript:
 
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
 
     def generate_golden_transcript(self, transcripts: Dict[str, str]) -> Tuple[str, Dict]:
         """
