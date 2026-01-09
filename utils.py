@@ -5,8 +5,6 @@ Handles API integrations for multiple STT providers and Gemini-based Golden Tran
 
 import os
 import time
-import asyncio
-import aiohttp
 import requests
 from typing import Dict, List, Optional, Tuple
 import google.generativeai as genai
