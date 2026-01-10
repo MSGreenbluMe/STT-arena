@@ -137,7 +137,8 @@ class GladiaSTT(STTProvider):
                     "number_of_speakers": 2,
                     "min_speakers": 1,
                     "max_speakers": 10
-                }
+                },
+                "language": "sk"  # Slovak language
             }
 
             transcribe_response = requests.post(
@@ -151,27 +152,63 @@ class GladiaSTT(STTProvider):
                 self.error = f"Transcription Error: {transcribe_response.status_code} - {transcribe_response.text}"
                 return {'success': False, 'error': self.error}
 
-            result = transcribe_response.json()
+            initial_result = transcribe_response.json()
 
-            # Extract transcript from Gladia response
-            # Check multiple possible locations in response
-            if 'result' in result:
-                result_data = result['result']
-                if 'transcription' in result_data:
-                    transcription = result_data['transcription']
-                    self.transcript = transcription.get('full_transcript', '')
-                    self.metadata = {
-                        'diarization': transcription.get('utterances', []),
-                        'language': transcription.get('language', 'unknown'),
-                        'confidence': transcription.get('confidence', 0)
-                    }
-                else:
-                    self.transcript = result_data.get('text', '')
-                    self.metadata = result_data
-            else:
-                # Direct response format
-                self.transcript = result.get('transcription', {}).get('full_transcript', result.get('text', ''))
-                self.metadata = result
+            # Get transcription ID and result URL for polling
+            transcription_id = initial_result.get('id')
+            result_url = initial_result.get('result_url')
+
+            if not transcription_id:
+                self.error = "No transcription ID returned"
+                return {'success': False, 'error': self.error}
+
+            # Step 3: Poll for results (Gladia is async)
+            max_polls = 120  # Max 2 minutes polling (1s intervals)
+            poll_count = 0
+
+            while poll_count < max_polls:
+                time.sleep(1)  # Wait 1 second between polls
+                poll_count += 1
+
+                # Get transcription status
+                status_url = f"https://api.gladia.io/v2/pre-recorded/{transcription_id}"
+                status_response = requests.get(
+                    status_url,
+                    headers=headers,
+                    timeout=30
+                )
+
+                if status_response.status_code != 200:
+                    continue
+
+                result = status_response.json()
+                status = result.get('status')
+
+                if status == 'done':
+                    # Extract transcript from completed result
+                    if 'result' in result:
+                        result_data = result['result']
+                        if 'transcription' in result_data:
+                            transcription = result_data['transcription']
+                            self.transcript = transcription.get('full_transcript', '')
+                            self.metadata = {
+                                'diarization': transcription.get('utterances', []),
+                                'language': transcription.get('language', 'unknown'),
+                                'confidence': transcription.get('confidence', 0)
+                            }
+                        else:
+                            self.transcript = result_data.get('text', '')
+                            self.metadata = result_data
+
+                    self.processing_time = time.time() - start_time
+                    break
+                elif status == 'error':
+                    self.error = f"Gladia transcription error: {result.get('error', 'Unknown error')}"
+                    return {'success': False, 'error': self.error}
+
+            if not self.transcript:
+                self.error = "Transcription timeout or empty result"
+                return {'success': False, 'error': self.error}
 
             self.processing_time = time.time() - start_time
 
@@ -344,7 +381,9 @@ class DeepgramSTT(STTProvider):
                 'diarize': 'true',
                 'utterances': 'true',
                 'smart_format': 'true',
-                'model': 'whisper-large'  # 20 min processing time vs 10 min for nova-2
+                'model': 'whisper-large',
+                'language': 'sk',  # Slovak language
+                'detect_language': 'false'
             }
 
             with open(audio_file_path, 'rb') as audio_file:
