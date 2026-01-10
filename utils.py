@@ -96,7 +96,7 @@ class GladiaSTT(STTProvider):
     def __init__(self, api_key: str):
         super().__init__("Gladia", api_key)
         self.upload_url = "https://api.gladia.io/v2/upload"
-        self.transcribe_url = "https://api.gladia.io/v2/pre-recorded"
+        self.transcribe_url = "https://api.gladia.io/v2/transcription"  # Fixed endpoint
 
     def transcribe(self, audio_file_path: str) -> Dict:
         """Transcribe audio using Gladia API (2-step: upload + transcribe)"""
@@ -129,11 +129,15 @@ class GladiaSTT(STTProvider):
                 self.error = "No audio_url returned from upload"
                 return {'success': False, 'error': self.error}
 
-            # Step 2: Request transcription
+            # Step 2: Request transcription with proper payload format
             transcribe_payload = {
                 "audio_url": audio_url,
                 "diarization": True,
-                "enable_code_switching": True
+                "diarization_config": {
+                    "number_of_speakers": 2,
+                    "min_speakers": 1,
+                    "max_speakers": 10
+                }
             }
 
             transcribe_response = requests.post(
@@ -149,15 +153,25 @@ class GladiaSTT(STTProvider):
 
             result = transcribe_response.json()
 
-            # Extract transcript (Gladia v2 returns in result.transcription)
-            transcription_data = result.get('result', {}).get('transcription', {})
-            self.transcript = transcription_data.get('full_transcript', '')
-
-            self.metadata = {
-                'diarization': transcription_data.get('utterances', []),
-                'language': transcription_data.get('language', 'unknown'),
-                'confidence': transcription_data.get('confidence', 0)
-            }
+            # Extract transcript from Gladia response
+            # Check multiple possible locations in response
+            if 'result' in result:
+                result_data = result['result']
+                if 'transcription' in result_data:
+                    transcription = result_data['transcription']
+                    self.transcript = transcription.get('full_transcript', '')
+                    self.metadata = {
+                        'diarization': transcription.get('utterances', []),
+                        'language': transcription.get('language', 'unknown'),
+                        'confidence': transcription.get('confidence', 0)
+                    }
+                else:
+                    self.transcript = result_data.get('text', '')
+                    self.metadata = result_data
+            else:
+                # Direct response format
+                self.transcript = result.get('transcription', {}).get('full_transcript', result.get('text', ''))
+                self.metadata = result
 
             self.processing_time = time.time() - start_time
 
