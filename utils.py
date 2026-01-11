@@ -301,29 +301,43 @@ class BehavioralSignalsSTT(STTProvider):
 
     def __init__(self, api_key: str, api_url: str):
         super().__init__("Behavioral Signals", api_key)
-        self.api_url = api_url if api_url else "https://api.behavioralsignals.com/v5/process/audio"
+        self.api_url = api_url if api_url else "https://api.behavioralsignals.com/v5/clients/10000215/processes/audio"
 
     def transcribe(self, audio_file_path: str, language: str = 'auto') -> Dict:
-        """Transcribe audio using Behavioral Signals Oliver API"""
+        """Transcribe audio using Behavioral Signals API v5"""
         start_time = time.time()
 
         try:
             headers = {
-                "X-Auth-Token": self.api_key
+                "X-Auth-Token": self.api_key,
+                "Accept": "application/json"
             }
 
             with open(audio_file_path, 'rb') as f:
                 audio_data = f.read()
 
-            files = {'file': ('audio.wav', audio_data)}
-            data = {
-                'name': 'stt-arena-audio',
-                'predictionmode': 'full'
+            # Detect file extension for proper MIME type
+            ext = os.path.splitext(audio_file_path)[1].lower()
+            mime_map = {
+                '.wav': 'audio/wav',
+                '.mp3': 'audio/mpeg',
+                '.m4a': 'audio/mp4',
+                '.ogg': 'audio/ogg',
+                '.flac': 'audio/flac'
             }
+            mime_type = mime_map.get(ext, 'audio/wav')
 
-            # Add language if specified
+            files = {'file': (f'audio{ext}', audio_data, mime_type)}
+
+            # Build metadata
+            meta = {'source': 'stt-arena'}
             if language != 'auto':
-                data['language'] = language
+                meta['language'] = language
+
+            data = {
+                'name': 'stt-arena-transcription',
+                'meta': json.dumps(meta)
+            }
 
             response = requests.post(
                 self.api_url,
@@ -335,14 +349,31 @@ class BehavioralSignalsSTT(STTProvider):
 
             if response.status_code in [200, 201]:
                 result = response.json()
-                self.transcript = result.get('transcript', result.get('text', ''))
+
+                # Check if this is an async response (contains pid for polling)
+                if 'pid' in result and 'transcript' not in result:
+                    self.error = f"Async processing not yet implemented. Process ID: {result.get('pid')}"
+                    return {'success': False, 'error': self.error}
+
+                # Extract transcript from various possible fields
+                self.transcript = result.get('transcript', result.get('text', result.get('transcription', '')))
+
+                # Extract metadata
                 self.metadata = {
+                    'pid': result.get('pid', ''),
+                    'status': result.get('status', ''),
+                    'duration': result.get('duration', 0),
                     'emotion': result.get('emotion', {}),
                     'sentiment': result.get('sentiment', {}),
                     'tone': result.get('tone', {}),
-                    'conversation_metrics': result.get('metrics', {})
+                    'conversation_metrics': result.get('metrics', {}),
+                    'raw_response': result  # Keep full response for debugging
                 }
                 self.processing_time = time.time() - start_time
+
+                if not self.transcript:
+                    self.error = f"No transcript in response. Full response: {json.dumps(result, indent=2)}"
+                    return {'success': False, 'error': self.error}
 
                 return {
                     'success': True,

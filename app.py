@@ -131,8 +131,8 @@ def sidebar_config():
 
     api_keys['behavioral_url'] = st.sidebar.text_input(
         "Behavioral Signals URL",
-        value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v5/projects/10000215/process/audio'),
-        help="API endpoint for Behavioral Signals (include project CID in URL)"
+        value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v5/clients/10000215/processes/audio'),
+        help="API endpoint for Behavioral Signals (format: /v5/clients/{CID}/processes/audio)"
     )
 
     api_keys['deepgram'] = st.sidebar.text_input(
