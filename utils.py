@@ -36,7 +36,7 @@ class ElevenLabsSTT(STTProvider):
         super().__init__("ElevenLabs", api_key)
         self.base_url = "https://api.elevenlabs.io/v1/speech-to-text"
 
-    def transcribe(self, audio_file_path: str) -> Dict:
+    def transcribe(self, audio_file_path: str, language: str = 'auto') -> Dict:
         """Transcribe audio using ElevenLabs Scribe API"""
         start_time = time.time()
 
@@ -54,6 +54,10 @@ class ElevenLabsSTT(STTProvider):
                 'diarize': 'true',
                 'tag_audio_events': 'true'
             }
+
+            # Add language if specified
+            if language != 'auto':
+                data['language'] = language
 
             response = requests.post(
                 self.base_url,
@@ -98,7 +102,7 @@ class GladiaSTT(STTProvider):
         self.upload_url = "https://api.gladia.io/v2/upload"
         self.transcribe_url = "https://api.gladia.io/v2/transcription"  # Fixed endpoint
 
-    def transcribe(self, audio_file_path: str) -> Dict:
+    def transcribe(self, audio_file_path: str, language: str = 'auto') -> Dict:
         """Transcribe audio using Gladia API (2-step: upload + transcribe)"""
         start_time = time.time()
 
@@ -137,9 +141,12 @@ class GladiaSTT(STTProvider):
                     "number_of_speakers": 2,
                     "min_speakers": 1,
                     "max_speakers": 10
-                },
-                "language": "sk"  # Slovak language
+                }
             }
+
+            # Add language if not auto-detect
+            if language != 'auto':
+                transcribe_payload["language"] = language
 
             transcribe_response = requests.post(
                 self.transcribe_url,
@@ -232,7 +239,7 @@ class OpenAIWhisperSTT(STTProvider):
         super().__init__("OpenAI Whisper", api_key)
         self.base_url = "https://api.openai.com/v1/audio/transcriptions"
 
-    def transcribe(self, audio_file_path: str) -> Dict:
+    def transcribe(self, audio_file_path: str, language: str = 'auto') -> Dict:
         """Transcribe audio using OpenAI Whisper API"""
         start_time = time.time()
 
@@ -250,6 +257,10 @@ class OpenAIWhisperSTT(STTProvider):
                 'response_format': 'verbose_json',
                 'timestamp_granularities': ['word']
             }
+
+            # Add language if specified (OpenAI uses ISO-639-1 codes)
+            if language != 'auto':
+                data['language'] = language
 
             response = requests.post(
                 self.base_url,
@@ -292,7 +303,7 @@ class BehavioralSignalsSTT(STTProvider):
         super().__init__("Behavioral Signals", api_key)
         self.api_url = api_url if api_url else "https://api.behavioralsignals.com/v5/process/audio"
 
-    def transcribe(self, audio_file_path: str) -> Dict:
+    def transcribe(self, audio_file_path: str, language: str = 'auto') -> Dict:
         """Transcribe audio using Behavioral Signals Oliver API"""
         start_time = time.time()
 
@@ -309,6 +320,10 @@ class BehavioralSignalsSTT(STTProvider):
                 'name': 'stt-arena-audio',
                 'predictionmode': 'full'
             }
+
+            # Add language if specified
+            if language != 'auto':
+                data['language'] = language
 
             response = requests.post(
                 self.api_url,
@@ -352,7 +367,7 @@ class DeepgramSTT(STTProvider):
         super().__init__("Deepgram", api_key)
         self.base_url = "https://api.deepgram.com/v1/listen"
 
-    def transcribe(self, audio_file_path: str) -> Dict:
+    def transcribe(self, audio_file_path: str, language: str = 'auto') -> Dict:
         """Transcribe audio using Deepgram API"""
         start_time = time.time()
 
@@ -381,10 +396,15 @@ class DeepgramSTT(STTProvider):
                 'diarize': 'true',
                 'utterances': 'true',
                 'smart_format': 'true',
-                'model': 'whisper-large',
-                'language': 'sk',  # Slovak language
-                'detect_language': 'false'
+                'model': 'whisper-large'
             }
+
+            # Add language parameter based on selection
+            if language != 'auto':
+                params['language'] = language
+                params['detect_language'] = 'false'
+            else:
+                params['detect_language'] = 'true'
 
             with open(audio_file_path, 'rb') as audio_file:
                 audio_data = audio_file.read()
@@ -536,7 +556,8 @@ def calculate_wer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
 def transcribe_with_all_providers(
     audio_file_path: str,
     enabled_providers: Dict[str, bool],
-    api_keys: Dict[str, str]
+    api_keys: Dict[str, str],
+    language: str = 'auto'
 ) -> Dict[str, Dict]:
     """
     Transcribe audio file with all enabled providers
@@ -545,6 +566,7 @@ def transcribe_with_all_providers(
         audio_file_path: Path to audio file
         enabled_providers: Dict of provider_name: is_enabled
         api_keys: Dict of provider API keys
+        language: Language code ('auto', 'cs', 'sk', etc.)
 
     Returns:
         Dictionary of provider results
@@ -554,17 +576,17 @@ def transcribe_with_all_providers(
     # ElevenLabs
     if enabled_providers.get('elevenlabs', False) and api_keys.get('elevenlabs'):
         elevenlabs = ElevenLabsSTT(api_keys['elevenlabs'])
-        results['ElevenLabs'] = elevenlabs.transcribe(audio_file_path)
+        results['ElevenLabs'] = elevenlabs.transcribe(audio_file_path, language)
 
     # Gladia
     if enabled_providers.get('gladia', False) and api_keys.get('gladia'):
         gladia = GladiaSTT(api_keys['gladia'])
-        results['Gladia'] = gladia.transcribe(audio_file_path)
+        results['Gladia'] = gladia.transcribe(audio_file_path, language)
 
     # OpenAI Whisper
     if enabled_providers.get('openai', False) and api_keys.get('openai'):
         whisper = OpenAIWhisperSTT(api_keys['openai'])
-        results['OpenAI Whisper'] = whisper.transcribe(audio_file_path)
+        results['OpenAI Whisper'] = whisper.transcribe(audio_file_path, language)
 
     # Behavioral Signals
     if enabled_providers.get('behavioral', False) and api_keys.get('behavioral'):
@@ -572,12 +594,12 @@ def transcribe_with_all_providers(
             api_keys['behavioral'],
             api_keys.get('behavioral_url', '')
         )
-        results['Behavioral Signals'] = behavioral.transcribe(audio_file_path)
+        results['Behavioral Signals'] = behavioral.transcribe(audio_file_path, language)
 
     # Deepgram
     if enabled_providers.get('deepgram', False) and api_keys.get('deepgram'):
         deepgram = DeepgramSTT(api_keys['deepgram'])
-        results['Deepgram'] = deepgram.transcribe(audio_file_path)
+        results['Deepgram'] = deepgram.transcribe(audio_file_path, language)
 
     return results
 

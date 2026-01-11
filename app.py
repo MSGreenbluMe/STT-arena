@@ -131,8 +131,8 @@ def sidebar_config():
 
     api_keys['behavioral_url'] = st.sidebar.text_input(
         "Behavioral Signals URL",
-        value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v1/transcribe'),
-        help="API endpoint for Behavioral Signals"
+        value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v5/projects/10000215/process/audio'),
+        help="API endpoint for Behavioral Signals (include project CID in URL)"
     )
 
     api_keys['deepgram'] = st.sidebar.text_input(
@@ -173,6 +173,21 @@ def sidebar_config():
     )
 
     st.sidebar.markdown("---")
+    st.sidebar.subheader("🌍 Language Settings")
+
+    language = st.sidebar.selectbox(
+        "Audio Language",
+        options=['auto', 'cs', 'sk'],
+        format_func=lambda x: {
+            'auto': '🔍 Auto-detect',
+            'cs': '🇨🇿 Czech (čeština)',
+            'sk': '🇸🇰 Slovak (slovenčina)'
+        }[x],
+        index=0,
+        help="Select the language of your audio file"
+    )
+
+    st.sidebar.markdown("---")
     st.sidebar.subheader("📁 Audio Upload")
 
     uploaded_file = st.sidebar.file_uploader(
@@ -181,7 +196,7 @@ def sidebar_config():
         help="Upload a call center audio recording"
     )
 
-    return api_keys, enabled_providers, uploaded_file
+    return api_keys, enabled_providers, uploaded_file, language
 
 
 def main():
@@ -196,7 +211,7 @@ def main():
     )
 
     # Sidebar configuration
-    api_keys, enabled_providers, uploaded_file = sidebar_config()
+    api_keys, enabled_providers, uploaded_file, language = sidebar_config()
 
     # Check if Gemini API key is provided
     if not api_keys['gemini']:
@@ -211,8 +226,17 @@ def main():
 
     # Audio file handling
     if uploaded_file is not None:
-        # Display audio player
-        st.audio(uploaded_file, format=f'audio/{uploaded_file.name.split(".")[-1]}')
+        # Display audio player with proper MIME type
+        file_ext = uploaded_file.name.split(".")[-1].lower()
+        mime_types = {
+            'wav': 'audio/wav',
+            'mp3': 'audio/mpeg',
+            'm4a': 'audio/mp4',
+            'ogg': 'audio/ogg',
+            'flac': 'audio/flac'
+        }
+        audio_format = mime_types.get(file_ext, f'audio/{file_ext}')
+        st.audio(uploaded_file, format=audio_format)
 
         # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{uploaded_file.name.split(".")[-1]}') as tmp_file:
@@ -229,7 +253,8 @@ def main():
                     results = transcribe_with_all_providers(
                         audio_file_path,
                         enabled_providers,
-                        api_keys
+                        api_keys,
+                        language
                     )
 
                     st.session_state.transcription_results = results
