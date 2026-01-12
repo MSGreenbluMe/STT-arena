@@ -123,6 +123,13 @@ def sidebar_config():
         type="password"
     )
 
+    api_keys['groq'] = st.sidebar.text_input(
+        "Groq API Key",
+        value=os.getenv('GROQ_API_KEY', os.getenv('groq', '')),
+        type="password",
+        help="Groq provides free access to Whisper Large v3"
+    )
+
     api_keys['behavioral'] = st.sidebar.text_input(
         "Behavioral Signals API Key",
         value=os.getenv('BEHAVIORAL_SIGNALS_API_KEY', os.getenv('Behavioral signals', '')),
@@ -160,6 +167,11 @@ def sidebar_config():
         "OpenAI Whisper",
         value=bool(api_keys['openai']),
         disabled=not bool(api_keys['openai'])
+    )
+    enabled_providers['groq'] = st.sidebar.checkbox(
+        "Groq Whisper Large v3",
+        value=bool(api_keys['groq']),
+        disabled=not bool(api_keys['groq'])
     )
     enabled_providers['behavioral'] = st.sidebar.checkbox(
         "Behavioral Signals",

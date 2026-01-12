@@ -296,6 +296,84 @@ class OpenAIWhisperSTT(STTProvider):
             return {'success': False, 'error': self.error}
 
 
+class GroqWhisperSTT(STTProvider):
+    """Groq Whisper Large v3 STT Provider (Free & Fast)"""
+
+    def __init__(self, api_key: str):
+        super().__init__("Groq Whisper", api_key)
+        self.base_url = "https://api.groq.com/openai/v1/audio/transcriptions"
+
+    def transcribe(self, audio_file_path: str, language: str = 'auto') -> Dict:
+        """Transcribe audio using Groq's Whisper Large v3 API"""
+        start_time = time.time()
+
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}"
+            }
+
+            with open(audio_file_path, 'rb') as f:
+                audio_data = f.read()
+
+            files = {'file': ('audio.mp3', audio_data)}
+            data = {
+                'model': 'whisper-large-v3',  # Groq's SOTA model
+                'response_format': 'verbose_json',  # Get segments with confidence
+                'temperature': 0.0  # Deterministic output
+            }
+
+            # Add language if specified
+            if language != 'auto':
+                data['language'] = language
+
+            response = requests.post(
+                self.base_url,
+                headers=headers,
+                files=files,
+                data=data,
+                timeout=600
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                self.transcript = result.get('text', '')
+
+                # Extract rich metadata from verbose_json
+                segments = result.get('segments', [])
+                avg_confidence = 0
+                if segments:
+                    # Calculate average confidence from avg_logprob
+                    # avg_logprob closer to 0 = higher confidence
+                    avg_logprob = sum(s.get('avg_logprob', -1) for s in segments) / len(segments)
+                    avg_confidence = round((1 + avg_logprob) * 100, 2)  # Convert to percentage
+
+                self.metadata = {
+                    'language': result.get('language', 'unknown'),
+                    'duration': result.get('duration', 0),
+                    'segments': segments,
+                    'avg_confidence': avg_confidence,
+                    'model': 'whisper-large-v3',
+                    'provider': 'Groq (Free)',
+                    'task': result.get('task', 'transcribe')
+                }
+                self.processing_time = time.time() - start_time
+
+                return {
+                    'success': True,
+                    'transcript': self.transcript,
+                    'metadata': self.metadata,
+                    'processing_time': self.processing_time
+                }
+            else:
+                self.error = f"API Error: {response.status_code} - {response.text}"
+                return {'success': False, 'error': self.error}
+
+        except Exception as e:
+            self.error = str(e)
+            self.processing_time = time.time() - start_time
+            return {'success': False, 'error': self.error}
+
+
 class BehavioralSignalsSTT(STTProvider):
     """Behavioral Signals STT Provider with emotion analysis"""
 
@@ -618,6 +696,11 @@ def transcribe_with_all_providers(
     if enabled_providers.get('openai', False) and api_keys.get('openai'):
         whisper = OpenAIWhisperSTT(api_keys['openai'])
         results['OpenAI Whisper'] = whisper.transcribe(audio_file_path, language)
+
+    # Groq Whisper Large v3
+    if enabled_providers.get('groq', False) and api_keys.get('groq'):
+        groq = GroqWhisperSTT(api_keys['groq'])
+        results['Groq Whisper'] = groq.transcribe(audio_file_path, language)
 
     # Behavioral Signals
     if enabled_providers.get('behavioral', False) and api_keys.get('behavioral'):
