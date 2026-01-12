@@ -84,6 +84,14 @@ class ElevenLabsSTT(STTProvider):
                     'metadata': self.metadata,
                     'processing_time': self.processing_time
                 }
+            elif response.status_code == 401:
+                # Specific handling for 401 errors (common with free tier)
+                error_detail = response.text
+                if 'Free Tier' in error_detail or 'unusual activity' in error_detail.lower():
+                    self.error = f"ElevenLabs Free Tier blocked. Try: 1) New API key 2) Paid plan 3) Contact support"
+                else:
+                    self.error = f"Authentication failed: Check API key format (should start with 'xi-api-key')"
+                return {'success': False, 'error': self.error}
             else:
                 self.error = f"API Error: {response.status_code} - {response.text}"
                 return {'success': False, 'error': self.error}
@@ -308,6 +316,14 @@ class GroqWhisperSTT(STTProvider):
         start_time = time.time()
 
         try:
+            # Check file size (Groq has 25MB limit)
+            file_size = os.path.getsize(audio_file_path)
+            file_size_mb = file_size / (1024 * 1024)
+
+            if file_size > 25 * 1024 * 1024:  # 25MB in bytes
+                self.error = f"File too large: {file_size_mb:.1f}MB (Groq limit: 25MB). Try shorter audio or use Deepgram/Gladia for long files."
+                return {'success': False, 'error': self.error}
+
             headers = {
                 "Authorization": f"Bearer {self.api_key}"
             }
@@ -429,9 +445,40 @@ class BehavioralSignalsSTT(STTProvider):
                 result = response.json()
 
                 # Check if this is an async response (contains pid for polling)
-                if 'pid' in result and 'transcript' not in result:
-                    self.error = f"Async processing not yet implemented. Process ID: {result.get('pid')}"
-                    return {'success': False, 'error': self.error}
+                if 'pid' in result:
+                    pid = result.get('pid')
+
+                    # If no transcript yet, poll for results
+                    if not result.get('transcript') and not result.get('text'):
+                        # Polling loop (max 3 minutes for 11-minute audio)
+                        max_polls = 180  # 3 minutes
+                        poll_count = 0
+
+                        # Extract base URL and construct status URL
+                        # URL format: /v5/clients/{cid}/processes/{pid}
+                        base_url = self.api_url.replace('/processes/audio', '')
+                        status_url = f"{base_url}/processes/{pid}"
+
+                        while poll_count < max_polls:
+                            time.sleep(2)  # Wait 2 seconds between polls
+                            poll_count += 1
+
+                            status_response = requests.get(
+                                status_url,
+                                headers=headers,
+                                timeout=30
+                            )
+
+                            if status_response.status_code == 200:
+                                result = status_response.json()
+                                status = result.get('status', '').lower()
+
+                                # Check for completion
+                                if status in ['done', 'completed', 'success']:
+                                    break
+                                elif status in ['error', 'failed']:
+                                    self.error = f"Processing failed: {result.get('statusmsg', 'Unknown error')}"
+                                    return {'success': False, 'error': self.error}
 
                 # Extract transcript from various possible fields
                 self.transcript = result.get('transcript', result.get('text', result.get('transcription', '')))
