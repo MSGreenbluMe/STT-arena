@@ -471,7 +471,11 @@ class BehavioralSignalsSTT(STTProvider):
 
                             if status_response.status_code == 200:
                                 result = status_response.json()
-                                status = result.get('status', '').lower()
+                                status = result.get('status', '')
+                                # Convert to string and lowercase safely
+                                if isinstance(status, int):
+                                    status = str(status)
+                                status = status.lower() if status else ''
 
                                 # Check for completion
                                 if status in ['done', 'completed', 'success']:
@@ -606,9 +610,11 @@ class DeepgramSTT(STTProvider):
 
 
 class GeminiGoldenTranscript:
-    """Generate Golden Transcript using Google Gemini"""
+    """Generate Golden Transcript using Google Gemini (with Groq fallback)"""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, groq_api_key: str = None):
+        self.gemini_api_key = api_key
+        self.groq_api_key = groq_api_key
         genai.configure(api_key=api_key)
         # Use gemini-1.5-flash for stability (gemini-2.5-flash may not be available yet)
         self.model = genai.GenerativeModel('gemini-1.5-flash')
@@ -634,22 +640,88 @@ class GeminiGoldenTranscript:
             metadata = {
                 'sources_count': len(transcripts),
                 'sources': list(transcripts.keys()),
-                'generation_successful': True
+                'generation_successful': True,
+                'generator': 'Gemini 1.5 Flash'
             }
 
             return golden_transcript, metadata
 
         except Exception as e:
-            # Fallback: return the longest transcript if Gemini fails
-            fallback_transcript = max(transcripts.values(), key=len) if transcripts else ""
-            metadata = {
-                'sources_count': len(transcripts),
-                'sources': list(transcripts.keys()),
-                'generation_successful': False,
-                'error': str(e),
-                'fallback_used': True
-            }
-            return fallback_transcript, metadata
+            # Fallback to Groq if available
+            if self.groq_api_key:
+                try:
+                    fallback_transcript = self._generate_with_groq(transcripts)
+                    metadata = {
+                        'sources_count': len(transcripts),
+                        'sources': list(transcripts.keys()),
+                        'generation_successful': True,
+                        'generator': 'Groq (Gemini fallback)',
+                        'gemini_error': str(e)
+                    }
+                    return fallback_transcript, metadata
+                except Exception as groq_error:
+                    # Both failed, use longest transcript
+                    fallback_transcript = max(transcripts.values(), key=len) if transcripts else ""
+                    metadata = {
+                        'sources_count': len(transcripts),
+                        'sources': list(transcripts.keys()),
+                        'generation_successful': False,
+                        'generator': 'Longest transcript (both AI failed)',
+                        'gemini_error': str(e),
+                        'groq_error': str(groq_error),
+                        'fallback_used': True
+                    }
+                    return fallback_transcript, metadata
+            else:
+                # No Groq fallback, use longest transcript
+                fallback_transcript = max(transcripts.values(), key=len) if transcripts else ""
+                metadata = {
+                    'sources_count': len(transcripts),
+                    'sources': list(transcripts.keys()),
+                    'generation_successful': False,
+                    'generator': 'Longest transcript (Gemini failed)',
+                    'error': str(e),
+                    'fallback_used': True
+                }
+                return fallback_transcript, metadata
+
+    def _generate_with_groq(self, transcripts: Dict[str, str]) -> str:
+        """Fallback generation using Groq LLM"""
+        prompt = self._build_prompt(transcripts)
+
+        headers = {
+            "Authorization": f"Bearer {self.groq_api_key}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "model": "llama-3.3-70b-versatile",  # Groq's best model
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are an expert transcriptionist. Analyze multiple STT outputs and generate the most accurate transcript."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "temperature": 0.1,
+            "max_tokens": 4096
+        }
+
+        response = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=120
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            return result['choices'][0]['message']['content'].strip()
+        else:
+            raise Exception(f"Groq API error: {response.status_code} - {response.text}")
 
     def _build_prompt(self, transcripts: Dict[str, str]) -> str:
         """Build the prompt for Gemini to generate golden transcript"""
@@ -707,6 +779,39 @@ def calculate_wer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
             wer_scores[provider] = None
 
     return wer_scores
+
+
+def calculate_cer_scores(transcripts: Dict[str, str], reference: str) -> Dict[str, float]:
+    """
+    Calculate Character Error Rate (CER) for each transcript against the reference
+
+    Args:
+        transcripts: Dictionary of provider_name: transcript_text
+        reference: The golden/reference transcript
+
+    Returns:
+        Dictionary of provider_name: cer_score
+    """
+    cer_scores = {}
+
+    for provider, transcript in transcripts.items():
+        try:
+            if transcript and reference:
+                # Calculate character-level Levenshtein distance
+                ref_chars = list(reference)
+                trans_chars = list(transcript)
+
+                # Simple CER calculation using character-level comparison
+                # Using jiwer with character mode
+                from jiwer import cer as calculate_cer
+                error_rate = calculate_cer(reference, transcript)
+                cer_scores[provider] = round(error_rate * 100, 2)  # Convert to percentage
+            else:
+                cer_scores[provider] = None
+        except Exception as e:
+            cer_scores[provider] = None
+
+    return cer_scores
 
 
 def transcribe_with_all_providers(

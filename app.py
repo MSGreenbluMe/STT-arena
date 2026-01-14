@@ -15,6 +15,7 @@ from utils import (
     transcribe_with_all_providers,
     GeminiGoldenTranscript,
     calculate_wer_scores,
+    calculate_cer_scores,
     format_metadata_for_display
 )
 
@@ -83,8 +84,12 @@ def initialize_session_state():
         st.session_state.golden_transcript = None
     if 'wer_scores' not in st.session_state:
         st.session_state.wer_scores = None
+    if 'cer_scores' not in st.session_state:
+        st.session_state.cer_scores = None
     if 'audio_file_path' not in st.session_state:
         st.session_state.audio_file_path = None
+    if 'transcription_history' not in st.session_state:
+        st.session_state.transcription_history = []
 
 
 def sidebar_config():
@@ -282,13 +287,36 @@ def main():
                             }
 
                             if transcripts:
-                                gemini = GeminiGoldenTranscript(api_keys['gemini'])
-                                golden_transcript, metadata = gemini.generate_golden_transcript(transcripts)
+                                # Initialize Gemini with Groq fallback
+                                gemini = GeminiGoldenTranscript(
+                                    api_keys['gemini'],
+                                    groq_api_key=api_keys.get('groq')
+                                )
+                                golden_transcript, gen_metadata = gemini.generate_golden_transcript(transcripts)
                                 st.session_state.golden_transcript = golden_transcript
 
-                                # Calculate WER scores
+                                # Show which generator was used
+                                if gen_metadata.get('generator'):
+                                    if 'fallback' in gen_metadata.get('generator', '').lower():
+                                        st.info(f"ℹ️ Generated using: {gen_metadata['generator']}")
+
+                                # Calculate WER and CER scores
                                 wer_scores = calculate_wer_scores(transcripts, golden_transcript)
+                                cer_scores = calculate_cer_scores(transcripts, golden_transcript)
                                 st.session_state.wer_scores = wer_scores
+                                st.session_state.cer_scores = cer_scores
+
+                                # Add to history
+                                history_entry = {
+                                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                    'audio_file': uploaded_file.name if uploaded_file else 'Unknown',
+                                    'language': language,
+                                    'providers': list(transcripts.keys()),
+                                    'wer_scores': wer_scores.copy(),
+                                    'cer_scores': cer_scores.copy(),
+                                    'generator': gen_metadata.get('generator', 'Unknown')
+                                }
+                                st.session_state.transcription_history.append(history_entry)
                             else:
                                 st.error("❌ No successful transcriptions to generate Golden Transcript.")
 
@@ -311,18 +339,16 @@ def main():
                 )
 
                 if edited_golden != st.session_state.golden_transcript:
-                    if st.button("🔄 Recalculate WER with Edited Transcript"):
+                    if st.button("🔄 Recalculate Metrics with Edited Transcript"):
                         st.session_state.golden_transcript = edited_golden
-                        # Recalculate WER
+                        # Recalculate WER and CER
                         transcripts = {
                             provider: data['transcript']
                             for provider, data in st.session_state.transcription_results.items()
                             if data.get('success') and data.get('transcript')
                         }
-                        st.session_state.wer_scores = calculate_wer_scores(
-                            transcripts,
-                            edited_golden
-                        )
+                        st.session_state.wer_scores = calculate_wer_scores(transcripts, edited_golden)
+                        st.session_state.cer_scores = calculate_cer_scores(transcripts, edited_golden)
                         st.rerun()
 
                 st.markdown('</div>', unsafe_allow_html=True)
@@ -336,16 +362,21 @@ def main():
                     wer_score = st.session_state.wer_scores.get(provider, 'N/A') if st.session_state.wer_scores else 'N/A'
                     wer_display = f"{wer_score}%" if wer_score != 'N/A' and wer_score is not None else 'N/A'
 
+                    cer_score = st.session_state.cer_scores.get(provider, 'N/A') if st.session_state.cer_scores else 'N/A'
+                    cer_display = f"{cer_score}%" if cer_score != 'N/A' and cer_score is not None else 'N/A'
+
                     metrics_data.append({
                         'Provider': provider,
-                        'WER Score': wer_display,
+                        'WER': wer_display,
+                        'CER': cer_display,
                         'Processing Time (s)': f"{result.get('processing_time', 0):.2f}",
                         'Status': '✅ Success'
                     })
                 else:
                     metrics_data.append({
                         'Provider': provider,
-                        'WER Score': 'N/A',
+                        'WER': 'N/A',
+                        'CER': 'N/A',
                         'Processing Time (s)': 'N/A',
                         'Status': f"❌ {result.get('error', 'Failed')}"
                     })
@@ -412,7 +443,9 @@ def main():
                             all_transcripts += "-" * 60 + "\n"
                             all_transcripts += result.get('transcript', '') + "\n"
                             wer = st.session_state.wer_scores.get(provider, 'N/A') if st.session_state.wer_scores else 'N/A'
+                            cer = st.session_state.cer_scores.get(provider, 'N/A') if st.session_state.cer_scores else 'N/A'
                             all_transcripts += f"WER: {wer}%\n" if wer != 'N/A' else "WER: N/A\n"
+                            all_transcripts += f"CER: {cer}%\n" if cer != 'N/A' else "CER: N/A\n"
 
                     st.download_button(
                         label="Download All as TXT",
@@ -423,6 +456,51 @@ def main():
 
     else:
         st.info("👈 Please upload an audio file from the sidebar to begin.")
+
+    # Transcription History
+    if st.session_state.transcription_history:
+        st.markdown("---")
+        st.markdown("## 📜 Transcription History")
+
+        # Add clear history button
+        col1, col2 = st.columns([3, 1])
+        with col2:
+            if st.button("🗑️ Clear History"):
+                st.session_state.transcription_history = []
+                st.rerun()
+
+        # Display history table
+        history_data = []
+        for idx, entry in enumerate(reversed(st.session_state.transcription_history), 1):
+            # Calculate average WER and CER
+            wer_values = [v for v in entry['wer_scores'].values() if v is not None]
+            cer_values = [v for v in entry['cer_scores'].values() if v is not None]
+            avg_wer = round(sum(wer_values) / len(wer_values), 2) if wer_values else 'N/A'
+            avg_cer = round(sum(cer_values) / len(cer_values), 2) if cer_values else 'N/A'
+
+            history_data.append({
+                '#': idx,
+                'Timestamp': entry['timestamp'],
+                'Audio File': entry['audio_file'],
+                'Language': entry['language'].upper(),
+                'Providers': len(entry['providers']),
+                'Avg WER': f"{avg_wer}%" if avg_wer != 'N/A' else 'N/A',
+                'Avg CER': f"{avg_cer}%" if avg_cer != 'N/A' else 'N/A',
+                'Generator': entry['generator']
+            })
+
+        df_history = pd.DataFrame(history_data)
+        st.dataframe(df_history, use_container_width=True, hide_index=True)
+
+        # Export history button
+        if st.button("📥 Download History as CSV"):
+            csv_data = df_history.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv_data,
+                file_name=f"stt_arena_history_{time.strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
 
     # Footer
     st.markdown("---")
