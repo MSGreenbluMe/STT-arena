@@ -4,3 +4,4 @@ jiwer
 pandas
 google-generativeai
 python-dotenv
+plotly

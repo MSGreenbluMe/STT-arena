@@ -10,12 +10,15 @@ from pathlib import Path
 from dotenv import load_dotenv
 import pandas as pd
 import time
+import plotly.express as px
+import plotly.graph_objects as go
 
 from utils import (
     transcribe_with_all_providers,
     GeminiGoldenTranscript,
     calculate_wer_scores,
     calculate_cer_scores,
+    calculate_costs,
     format_metadata_for_display
 )
 
@@ -86,6 +89,8 @@ def initialize_session_state():
         st.session_state.wer_scores = None
     if 'cer_scores' not in st.session_state:
         st.session_state.cer_scores = None
+    if 'costs' not in st.session_state:
+        st.session_state.costs = None
     if 'audio_file_path' not in st.session_state:
         st.session_state.audio_file_path = None
     if 'transcription_history' not in st.session_state:
@@ -178,11 +183,15 @@ def sidebar_config():
         value=bool(api_keys['groq']),
         disabled=not bool(api_keys['groq'])
     )
-    enabled_providers['behavioral'] = st.sidebar.checkbox(
-        "Behavioral Signals",
-        value=bool(api_keys['behavioral']),
-        disabled=not bool(api_keys['behavioral'])
+    # Behavioral Signals temporarily disabled
+    st.sidebar.checkbox(
+        "Behavioral Signals ⚠️ (Temporarily Disabled)",
+        value=False,
+        disabled=True,
+        help="Temporarily disabled due to performance issues and API errors"
     )
+    enabled_providers['behavioral'] = False  # Force disabled
+
     enabled_providers['deepgram'] = st.sidebar.checkbox(
         "Deepgram",
         value=bool(api_keys['deepgram']),
@@ -245,15 +254,25 @@ def main():
     if uploaded_file is not None:
         # Display audio player with proper MIME type
         file_ext = uploaded_file.name.split(".")[-1].lower()
-        mime_types = {
-            'wav': 'audio/wav',
-            'mp3': 'audio/mpeg',
-            'm4a': 'audio/mp4',
-            'ogg': 'audio/ogg',
-            'flac': 'audio/flac'
-        }
-        audio_format = mime_types.get(file_ext, f'audio/{file_ext}')
-        st.audio(uploaded_file, format=audio_format)
+
+        # Special handling for WAV files (Streamlit has issues with some WAV formats)
+        if file_ext == 'wav':
+            # For WAV, try reading the bytes and providing them directly
+            try:
+                audio_bytes = uploaded_file.getvalue()
+                st.audio(audio_bytes, format='audio/wav')
+            except Exception as e:
+                st.warning(f"⚠️ WAV playback may not work in browser. File uploaded successfully. Error: {e}")
+        else:
+            # For other formats, use standard approach
+            mime_types = {
+                'mp3': 'audio/mpeg',
+                'm4a': 'audio/mp4',
+                'ogg': 'audio/ogg',
+                'flac': 'audio/flac'
+            }
+            audio_format = mime_types.get(file_ext, f'audio/{file_ext}')
+            st.audio(uploaded_file, format=audio_format)
 
         # Save uploaded file temporarily
         with tempfile.NamedTemporaryFile(delete=False, suffix=f'.{uploaded_file.name.split(".")[-1]}') as tmp_file:
@@ -265,8 +284,12 @@ def main():
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
             if st.button("🚀 Start Transcription Arena", use_container_width=True, type="primary"):
-                with st.spinner("🔄 Transcribing with multiple providers..."):
-                    # Transcribe with all enabled providers
+                with st.status("🎙️ STT Arena Processing...", expanded=True) as status:
+                    # Step 1: Transcribe with all providers
+                    st.write("🔄 Transcribing audio with enabled providers...")
+                    enabled_count = sum(1 for v in enabled_providers.values() if v)
+                    st.write(f"📊 {enabled_count} providers selected")
+
                     results = transcribe_with_all_providers(
                         audio_file_path,
                         enabled_providers,
@@ -276,49 +299,70 @@ def main():
 
                     st.session_state.transcription_results = results
 
-                    # Generate Golden Transcript
+                    # Count successful transcriptions
+                    success_count = sum(1 for r in results.values() if r.get('success'))
+                    st.write(f"✅ {success_count}/{len(results)} providers successful")
+
+                    # Step 2: Calculate costs
+                    st.write("💰 Calculating costs...")
+                    costs = calculate_costs(results)
+                    st.session_state.costs = costs
+                    total_cost = sum(c for c in costs.values() if c is not None)
+                    st.write(f"💵 Total cost: ${total_cost:.4f}")
+
+                    # Step 3: Generate Golden Transcript
                     if results:
-                        with st.spinner("✨ Generating Golden Transcript with Gemini..."):
-                            # Extract successful transcripts
-                            transcripts = {
-                                provider: data['transcript']
-                                for provider, data in results.items()
-                                if data.get('success') and data.get('transcript')
+                        st.write("✨ Generating Golden Transcript...")
+
+                        # Extract successful transcripts
+                        transcripts = {
+                            provider: data['transcript']
+                            for provider, data in results.items()
+                            if data.get('success') and data.get('transcript')
+                        }
+
+                        if transcripts:
+                            # Initialize Gemini with Groq fallback
+                            gemini = GeminiGoldenTranscript(
+                                api_keys['gemini'],
+                                groq_api_key=api_keys.get('groq')
+                            )
+                            golden_transcript, gen_metadata = gemini.generate_golden_transcript(transcripts)
+                            st.session_state.golden_transcript = golden_transcript
+
+                            generator = gen_metadata.get('generator', 'Unknown')
+                            st.write(f"🤖 Generator used: {generator}")
+
+                            # Show fallback info if used
+                            if 'fallback' in generator.lower():
+                                st.info(f"ℹ️ Gemini failed, used fallback: {generator}")
+
+                            # Step 4: Calculate metrics
+                            st.write("📊 Calculating quality metrics (WER, CER)...")
+                            wer_scores = calculate_wer_scores(transcripts, golden_transcript)
+                            cer_scores = calculate_cer_scores(transcripts, golden_transcript)
+                            st.session_state.wer_scores = wer_scores
+                            st.session_state.cer_scores = cer_scores
+
+                            # Step 5: Save to history
+                            st.write("💾 Saving to history...")
+                            history_entry = {
+                                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
+                                'audio_file': uploaded_file.name if uploaded_file else 'Unknown',
+                                'language': language,
+                                'providers': list(transcripts.keys()),
+                                'wer_scores': wer_scores.copy(),
+                                'cer_scores': cer_scores.copy(),
+                                'costs': costs.copy(),
+                                'total_cost': total_cost,
+                                'generator': generator
                             }
+                            st.session_state.transcription_history.append(history_entry)
 
-                            if transcripts:
-                                # Initialize Gemini with Groq fallback
-                                gemini = GeminiGoldenTranscript(
-                                    api_keys['gemini'],
-                                    groq_api_key=api_keys.get('groq')
-                                )
-                                golden_transcript, gen_metadata = gemini.generate_golden_transcript(transcripts)
-                                st.session_state.golden_transcript = golden_transcript
-
-                                # Show which generator was used
-                                if gen_metadata.get('generator'):
-                                    if 'fallback' in gen_metadata.get('generator', '').lower():
-                                        st.info(f"ℹ️ Generated using: {gen_metadata['generator']}")
-
-                                # Calculate WER and CER scores
-                                wer_scores = calculate_wer_scores(transcripts, golden_transcript)
-                                cer_scores = calculate_cer_scores(transcripts, golden_transcript)
-                                st.session_state.wer_scores = wer_scores
-                                st.session_state.cer_scores = cer_scores
-
-                                # Add to history
-                                history_entry = {
-                                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
-                                    'audio_file': uploaded_file.name if uploaded_file else 'Unknown',
-                                    'language': language,
-                                    'providers': list(transcripts.keys()),
-                                    'wer_scores': wer_scores.copy(),
-                                    'cer_scores': cer_scores.copy(),
-                                    'generator': gen_metadata.get('generator', 'Unknown')
-                                }
-                                st.session_state.transcription_history.append(history_entry)
-                            else:
-                                st.error("❌ No successful transcriptions to generate Golden Transcript.")
+                            status.update(label="✅ Transcription Complete!", state="complete")
+                        else:
+                            st.error("❌ No successful transcriptions to generate Golden Transcript.")
+                            status.update(label="❌ Failed", state="error")
 
         # Display results
         if st.session_state.transcription_results:
@@ -356,6 +400,29 @@ def main():
             # Performance Metrics
             st.markdown("### 📊 Performance Metrics")
 
+            # Add metric explanations
+            with st.expander("ℹ️ What do these metrics mean?"):
+                st.markdown("""
+                - **WER (Word Error Rate)**: Percentage of words that are incorrect compared to the reference transcript. Lower is better.
+                  - 0% = Perfect match
+                  - <10% = Excellent
+                  - 10-20% = Good
+                  - >20% = Needs improvement
+
+                - **CER (Character Error Rate)**: Percentage of characters that are incorrect. More sensitive than WER for languages with diacritics.
+                  - 0% = Perfect match
+                  - <5% = Excellent
+                  - 5-15% = Good
+                  - >15% = Needs improvement
+
+                - **Cost**: Estimated cost in USD based on provider pricing (as of Jan 2025)
+                  - Groq: FREE
+                  - OpenAI: $0.006/min
+                  - Deepgram: $0.0125/min
+                  - Gladia: $0.0183/min
+                  - ElevenLabs: $0.10/min
+                """)
+
             metrics_data = []
             for provider, result in st.session_state.transcription_results.items():
                 if result.get('success'):
@@ -365,11 +432,15 @@ def main():
                     cer_score = st.session_state.cer_scores.get(provider, 'N/A') if st.session_state.cer_scores else 'N/A'
                     cer_display = f"{cer_score}%" if cer_score != 'N/A' and cer_score is not None else 'N/A'
 
+                    cost = st.session_state.costs.get(provider, 'N/A') if st.session_state.costs else 'N/A'
+                    cost_display = f"${cost:.4f}" if cost != 'N/A' and cost is not None else 'FREE' if cost == 0 else 'N/A'
+
                     metrics_data.append({
                         'Provider': provider,
                         'WER': wer_display,
                         'CER': cer_display,
-                        'Processing Time (s)': f"{result.get('processing_time', 0):.2f}",
+                        'Cost': cost_display,
+                        'Time (s)': f"{result.get('processing_time', 0):.2f}",
                         'Status': '✅ Success'
                     })
                 else:
@@ -377,12 +448,18 @@ def main():
                         'Provider': provider,
                         'WER': 'N/A',
                         'CER': 'N/A',
-                        'Processing Time (s)': 'N/A',
-                        'Status': f"❌ {result.get('error', 'Failed')}"
+                        'Cost': 'N/A',
+                        'Time (s)': 'N/A',
+                        'Status': f"❌ {result.get('error', 'Failed')[:50]}..."
                     })
 
             df_metrics = pd.DataFrame(metrics_data)
             st.dataframe(df_metrics, use_container_width=True, hide_index=True)
+
+            # Show total cost
+            if st.session_state.costs:
+                total_cost = sum(c for c in st.session_state.costs.values() if c is not None)
+                st.metric("💰 Total Cost", f"${total_cost:.4f}")
 
             # Transcript Comparison
             st.markdown("### 📝 Transcript Comparison")
@@ -478,6 +555,8 @@ def main():
             avg_wer = round(sum(wer_values) / len(wer_values), 2) if wer_values else 'N/A'
             avg_cer = round(sum(cer_values) / len(cer_values), 2) if cer_values else 'N/A'
 
+            total_cost = entry.get('total_cost', 0)
+
             history_data.append({
                 '#': idx,
                 'Timestamp': entry['timestamp'],
@@ -486,11 +565,74 @@ def main():
                 'Providers': len(entry['providers']),
                 'Avg WER': f"{avg_wer}%" if avg_wer != 'N/A' else 'N/A',
                 'Avg CER': f"{avg_cer}%" if avg_cer != 'N/A' else 'N/A',
+                'Cost': f"${total_cost:.4f}",
                 'Generator': entry['generator']
             })
 
         df_history = pd.DataFrame(history_data)
         st.dataframe(df_history, use_container_width=True, hide_index=True)
+
+        # Visualizations
+        if len(st.session_state.transcription_history) > 1:
+            st.markdown("### 📈 History Visualizations")
+
+            # Prepare data for charts
+            viz_data = []
+            for idx, entry in enumerate(st.session_state.transcription_history):
+                timestamp = entry['timestamp']
+                for provider, wer_score in entry['wer_scores'].items():
+                    if wer_score is not None:
+                        viz_data.append({
+                            'Timestamp': timestamp,
+                            'Provider': provider,
+                            'WER': wer_score,
+                            'CER': entry['cer_scores'].get(provider, None),
+                            'Cost': entry.get('costs', {}).get(provider, 0)
+                        })
+
+            df_viz = pd.DataFrame(viz_data)
+
+            if not df_viz.empty:
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    st.markdown("#### WER Over Time by Provider")
+                    fig_wer = px.line(
+                        df_viz,
+                        x='Timestamp',
+                        y='WER',
+                        color='Provider',
+                        markers=True,
+                        title='Word Error Rate Trends'
+                    )
+                    fig_wer.update_layout(yaxis_title="WER (%)", height=400)
+                    st.plotly_chart(fig_wer, use_container_width=True)
+
+                with col2:
+                    st.markdown("#### CER Over Time by Provider")
+                    fig_cer = px.line(
+                        df_viz,
+                        x='Timestamp',
+                        y='CER',
+                        color='Provider',
+                        markers=True,
+                        title='Character Error Rate Trends'
+                    )
+                    fig_cer.update_layout(yaxis_title="CER (%)", height=400)
+                    st.plotly_chart(fig_cer, use_container_width=True)
+
+                # Cost analysis
+                st.markdown("#### 💰 Cost Analysis by Provider")
+                cost_by_provider = df_viz.groupby('Provider')['Cost'].sum().reset_index()
+                fig_cost = px.bar(
+                    cost_by_provider,
+                    x='Provider',
+                    y='Cost',
+                    title='Total Cost by Provider',
+                    color='Provider'
+                )
+                fig_cost.update_layout(yaxis_title="Total Cost ($)", height=400, showlegend=False)
+                st.plotly_chart(fig_cost, use_container_width=True)
 
         # Export history button
         if st.button("📥 Download History as CSV"):

@@ -814,6 +814,53 @@ def calculate_cer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
     return cer_scores
 
 
+def calculate_costs(results: Dict[str, Dict]) -> Dict[str, float]:
+    """
+    Calculate estimated cost for each transcription provider
+
+    Args:
+        results: Dictionary of provider results with metadata
+
+    Returns:
+        Dictionary of provider_name: cost_in_usd
+    """
+    # Pricing per minute (as of Jan 2025)
+    pricing = {
+        'ElevenLabs': 0.10,  # $0.10/min (Scribe v2)
+        'Gladia': 0.01830,   # $0.01830/min ($0.000305/second)
+        'OpenAI Whisper': 0.006,  # $0.006/min
+        'Groq Whisper': 0.0,  # FREE!
+        'Behavioral Signals': 0.0,  # Custom pricing
+        'Deepgram': 0.0125  # $0.0125/min (Whisper model)
+    }
+
+    costs = {}
+
+    for provider, result in results.items():
+        if not result.get('success'):
+            costs[provider] = None
+            continue
+
+        # Get duration from metadata (in seconds)
+        metadata = result.get('metadata', {})
+        duration_seconds = metadata.get('duration', 0)
+
+        # If no duration in metadata, estimate from processing time (not accurate but better than nothing)
+        if not duration_seconds:
+            duration_seconds = result.get('processing_time', 0)
+
+        # Convert to minutes
+        duration_minutes = duration_seconds / 60.0
+
+        # Calculate cost
+        price_per_min = pricing.get(provider, 0)
+        cost = duration_minutes * price_per_min
+
+        costs[provider] = round(cost, 4)  # Round to 4 decimal places
+
+    return costs
+
+
 def transcribe_with_all_providers(
     audio_file_path: str,
     enabled_providers: Dict[str, bool],
@@ -854,13 +901,13 @@ def transcribe_with_all_providers(
         groq = GroqWhisperSTT(api_keys['groq'])
         results['Groq Whisper'] = groq.transcribe(audio_file_path, language)
 
-    # Behavioral Signals
-    if enabled_providers.get('behavioral', False) and api_keys.get('behavioral'):
-        behavioral = BehavioralSignalsSTT(
-            api_keys['behavioral'],
-            api_keys.get('behavioral_url', '')
-        )
-        results['Behavioral Signals'] = behavioral.transcribe(audio_file_path, language)
+    # Behavioral Signals - TEMPORARILY DISABLED (slow performance, API issues)
+    # if enabled_providers.get('behavioral', False) and api_keys.get('behavioral'):
+    #     behavioral = BehavioralSignalsSTT(
+    #         api_keys['behavioral'],
+    #         api_keys.get('behavioral_url', '')
+    #     )
+    #     results['Behavioral Signals'] = behavioral.transcribe(audio_file_path, language)
 
     # Deepgram
     if enabled_providers.get('deepgram', False) and api_keys.get('deepgram'):
