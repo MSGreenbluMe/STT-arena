@@ -616,8 +616,9 @@ class GeminiGoldenTranscript:
         self.gemini_api_key = api_key
         self.groq_api_key = groq_api_key
         genai.configure(api_key=api_key)
-        # Use gemini-1.5-flash for stability (gemini-2.5-flash may not be available yet)
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
+        # Use gemini-1.5-flash-8b for higher rate limits on free tier
+        # flash-8b: RPM 15→4000, TPM 1M→4M, RPD 1500→4000
+        self.model = genai.GenerativeModel('gemini-1.5-flash-8b')
 
     def generate_golden_transcript(self, transcripts: Dict[str, str]) -> Tuple[str, Dict]:
         """
@@ -831,7 +832,8 @@ def calculate_costs(results: Dict[str, Dict]) -> Dict[str, float]:
         'OpenAI Whisper': 0.006,  # $0.006/min
         'Groq Whisper': 0.0,  # FREE!
         'Behavioral Signals': 0.0,  # Custom pricing
-        'Deepgram': 0.0125  # $0.0125/min (Whisper model)
+        'Deepgram': 0.0125,  # $0.0125/min (Whisper model)
+        'Manual Transcript': 0.0  # Manual upload (no cost)
     }
 
     costs = {}

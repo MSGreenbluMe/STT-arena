@@ -102,61 +102,62 @@ def sidebar_config():
     st.sidebar.title("⚙️ Configuration")
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader("🔑 API Keys")
 
-    # API Key inputs (with environment variable fallback)
-    # Try multiple environment variable names for compatibility
-    api_keys = {}
+    # Collapsible API Keys section
+    with st.sidebar.expander("🔐 API Keys (Advanced)", expanded=False):
+        st.markdown("**Configure your API keys below or use Streamlit secrets**")
 
-    api_keys['gemini'] = st.sidebar.text_input(
-        "Google Gemini API Key",
-        value=os.getenv('GEMINI_API_KEY', os.getenv('gemini', '')),
-        type="password",
-        help="Required for Golden Transcript generation"
-    )
+        api_keys = {}
 
-    api_keys['elevenlabs'] = st.sidebar.text_input(
-        "ElevenLabs API Key",
-        value=os.getenv('ELEVENLABS_API_KEY', os.getenv('elevenlabs', '')),
-        type="password"
-    )
+        api_keys['gemini'] = st.text_input(
+            "Google Gemini API Key",
+            value=os.getenv('GEMINI_API_KEY', os.getenv('gemini', '')),
+            type="password",
+            help="Required for Golden Transcript generation"
+        )
 
-    api_keys['gladia'] = st.sidebar.text_input(
-        "Gladia API Key",
-        value=os.getenv('GLADIA_API_KEY', os.getenv('gladia', '')),
-        type="password"
-    )
+        api_keys['elevenlabs'] = st.text_input(
+            "ElevenLabs API Key",
+            value=os.getenv('ELEVENLABS_API_KEY', os.getenv('elevenlabs', '')),
+            type="password"
+        )
 
-    api_keys['openai'] = st.sidebar.text_input(
-        "OpenAI API Key",
-        value=os.getenv('OPENAI_API_KEY', os.getenv('openai', '')),
-        type="password"
-    )
+        api_keys['gladia'] = st.text_input(
+            "Gladia API Key",
+            value=os.getenv('GLADIA_API_KEY', os.getenv('gladia', '')),
+            type="password"
+        )
 
-    api_keys['groq'] = st.sidebar.text_input(
-        "Groq API Key",
-        value=os.getenv('GROQ_API_KEY', os.getenv('groq', '')),
-        type="password",
-        help="Groq provides free access to Whisper Large v3"
-    )
+        api_keys['openai'] = st.text_input(
+            "OpenAI API Key",
+            value=os.getenv('OPENAI_API_KEY', os.getenv('openai', '')),
+            type="password"
+        )
 
-    api_keys['behavioral'] = st.sidebar.text_input(
-        "Behavioral Signals API Key",
-        value=os.getenv('BEHAVIORAL_SIGNALS_API_KEY', os.getenv('Behavioral signals', '')),
-        type="password"
-    )
+        api_keys['groq'] = st.text_input(
+            "Groq API Key",
+            value=os.getenv('GROQ_API_KEY', os.getenv('groq', '')),
+            type="password",
+            help="Groq provides free access to Whisper Large v3"
+        )
 
-    api_keys['behavioral_url'] = st.sidebar.text_input(
-        "Behavioral Signals URL",
-        value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v5/clients/10000215/processes/audio'),
-        help="API endpoint for Behavioral Signals (format: /v5/clients/{CID}/processes/audio)"
-    )
+        api_keys['behavioral'] = st.text_input(
+            "Behavioral Signals API Key",
+            value=os.getenv('BEHAVIORAL_SIGNALS_API_KEY', os.getenv('Behavioral signals', '')),
+            type="password"
+        )
 
-    api_keys['deepgram'] = st.sidebar.text_input(
-        "Deepgram API Key",
-        value=os.getenv('DEEPGRAM_API_KEY', os.getenv('Deepgram', '')),
-        type="password"
-    )
+        api_keys['behavioral_url'] = st.text_input(
+            "Behavioral Signals URL",
+            value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v5/clients/10000215/processes/audio'),
+            help="API endpoint for Behavioral Signals (format: /v5/clients/{CID}/processes/audio)"
+        )
+
+        api_keys['deepgram'] = st.text_input(
+            "Deepgram API Key",
+            value=os.getenv('DEEPGRAM_API_KEY', os.getenv('Deepgram', '')),
+            type="password"
+        )
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🎯 Select STT Providers")
@@ -222,7 +223,23 @@ def sidebar_config():
         help="Upload a call center audio recording"
     )
 
-    return api_keys, enabled_providers, uploaded_file, language
+    # Manual transcript upload option
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📄 Manual Transcript (Optional)")
+
+    manual_transcript = st.sidebar.text_area(
+        "Paste existing transcript",
+        height=100,
+        help="If you already have a transcript, paste it here to compare quality without API calls"
+    )
+
+    manual_provider_name = st.sidebar.text_input(
+        "Provider name for manual transcript",
+        value="Manual Transcript",
+        help="Name to display for your uploaded transcript"
+    )
+
+    return api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name
 
 
 def main():
@@ -237,7 +254,7 @@ def main():
     )
 
     # Sidebar configuration
-    api_keys, enabled_providers, uploaded_file, language = sidebar_config()
+    api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name = sidebar_config()
 
     # Check if Gemini API key is provided
     if not api_keys['gemini']:
@@ -296,6 +313,16 @@ def main():
                         api_keys,
                         language
                     )
+
+                    # Add manual transcript if provided
+                    if manual_transcript and manual_transcript.strip():
+                        st.write(f"📝 Adding manual transcript: {manual_provider_name}")
+                        results[manual_provider_name] = {
+                            'success': True,
+                            'transcript': manual_transcript.strip(),
+                            'metadata': {'source': 'manual_upload'},
+                            'processing_time': 0.0
+                        }
 
                     st.session_state.transcription_results = results
 
