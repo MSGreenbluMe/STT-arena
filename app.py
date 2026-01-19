@@ -19,6 +19,7 @@ from utils import (
     calculate_wer_scores,
     calculate_cer_scores,
     calculate_costs,
+    calculate_segment_wer,
     format_metadata_for_display
 )
 
@@ -505,14 +506,112 @@ def main():
                         st.write(result.get('transcript', 'No transcript available'))
                         st.markdown('</div>', unsafe_allow_html=True)
 
-                        # WER Score
-                        wer_score = st.session_state.wer_scores.get(provider, 'N/A') if st.session_state.wer_scores else 'N/A'
-                        if wer_score != 'N/A' and wer_score is not None:
-                            st.metric("Word Error Rate", f"{wer_score}%")
+                        # Metrics row
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            wer_score = st.session_state.wer_scores.get(provider, 'N/A') if st.session_state.wer_scores else 'N/A'
+                            if wer_score != 'N/A' and wer_score is not None:
+                                st.metric("WER", f"{wer_score}%")
+                        with col2:
+                            cer_score = st.session_state.cer_scores.get(provider, 'N/A') if st.session_state.cer_scores else 'N/A'
+                            if cer_score != 'N/A' and cer_score is not None:
+                                st.metric("CER", f"{cer_score}%")
+                        with col3:
+                            cost = st.session_state.costs.get(provider, 'N/A') if st.session_state.costs else 'N/A'
+                            if cost != 'N/A' and cost is not None:
+                                st.metric("Cost", f"${cost:.4f}")
+
+                        # Diarization (Speaker Identification)
+                        metadata = result.get('metadata', {})
+
+                        # Extract diarization info based on provider
+                        diarization_info = None
+                        if 'utterances' in metadata and metadata['utterances']:  # Deepgram/Gladia
+                            diarization_info = metadata['utterances']
+                        elif 'diarization' in metadata and metadata['diarization']:  # Gladia
+                            diarization_info = metadata['diarization']
+                        elif 'words' in metadata and metadata['words']:  # Check if words have speaker info
+                            words = metadata['words']
+                            if isinstance(words, list) and len(words) > 0:
+                                if 'speaker' in words[0] or 'speaker_id' in words[0]:
+                                    diarization_info = words
+
+                        if diarization_info:
+                            with st.expander("👥 Speaker Diarization"):
+                                if isinstance(diarization_info, list):
+                                    # Group by speaker
+                                    speakers = {}
+                                    for item in diarization_info:
+                                        if isinstance(item, dict):
+                                            speaker_id = item.get('speaker', item.get('speaker_id', item.get('channel', 'Unknown')))
+                                            text = item.get('text', item.get('transcript', ''))
+                                            if speaker_id not in speakers:
+                                                speakers[speaker_id] = []
+                                            if text:
+                                                speakers[speaker_id].append(text)
+
+                                    # Display speaker summaries
+                                    for speaker_id, texts in speakers.items():
+                                        st.markdown(f"**Speaker {speaker_id}:** {len(texts)} segments")
+                                        with st.expander(f"View Speaker {speaker_id} segments"):
+                                            for idx, text in enumerate(texts, 1):
+                                                st.write(f"{idx}. {text}")
+                                else:
+                                    st.json(diarization_info)
+
+                        # Timeline WER Visualization
+                        if st.session_state.golden_transcript:
+                            segments = metadata.get('segments', metadata.get('utterances', []))
+                            if segments and isinstance(segments, list) and len(segments) > 0:
+                                segment_wers = calculate_segment_wer(segments, st.session_state.golden_transcript)
+
+                                if segment_wers:
+                                    with st.expander("📊 WER Over Time (Timeline)"):
+                                        # Create dataframe for plotly
+                                        df_timeline = pd.DataFrame(segment_wers)
+
+                                        # Create timeline chart
+                                        fig = go.Figure()
+
+                                        # Add WER line
+                                        fig.add_trace(go.Scatter(
+                                            x=df_timeline['start'],
+                                            y=df_timeline['wer'],
+                                            mode='lines+markers',
+                                            name='WER',
+                                            line=dict(color='#ff4444', width=2),
+                                            marker=dict(size=8),
+                                            hovertemplate='<b>Time:</b> %{x:.1f}s<br><b>WER:</b> %{y:.1f}%<br><extra></extra>'
+                                        ))
+
+                                        # Add threshold lines
+                                        fig.add_hline(y=10, line_dash="dash", line_color="green",
+                                                     annotation_text="Excellent (<10%)")
+                                        fig.add_hline(y=20, line_dash="dash", line_color="orange",
+                                                     annotation_text="Good (<20%)")
+
+                                        fig.update_layout(
+                                            title=f"{provider} - Word Error Rate Over Time",
+                                            xaxis_title="Time (seconds)",
+                                            yaxis_title="WER (%)",
+                                            height=400,
+                                            hovermode='x unified'
+                                        )
+
+                                        st.plotly_chart(fig, use_container_width=True)
+
+                                        # Show worst segments
+                                        worst_segments = sorted(segment_wers, key=lambda x: x.get('wer', 0) if x.get('wer') is not None else 0, reverse=True)[:3]
+                                        if worst_segments and worst_segments[0].get('wer', 0) > 0:
+                                            st.markdown("**🔴 Highest Error Segments:**")
+                                            for idx, seg in enumerate(worst_segments, 1):
+                                                if seg.get('wer', 0) > 0:
+                                                    st.write(f"{idx}. Time {seg['start']:.1f}s - {seg['end']:.1f}s: WER {seg['wer']}%")
+                                                    st.caption(f"   Text: {seg['text']}")
 
                         # Metadata
-                        with st.expander("🔍 View Metadata & Details"):
-                            st.json(result.get('metadata', {}))
+                        with st.expander("🔍 View Full Metadata & Details"):
+                            st.json(metadata)
                     else:
                         st.markdown('<div class="error-box">', unsafe_allow_html=True)
                         st.error(f"Error: {result.get('error', 'Unknown error')}")

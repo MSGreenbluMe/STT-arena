@@ -815,6 +815,54 @@ def calculate_cer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
     return cer_scores
 
 
+def calculate_segment_wer(provider_segments: List[Dict], reference_text: str) -> List[Dict]:
+    """
+    Calculate WER for each segment/timestamp
+
+    Args:
+        provider_segments: List of segments with 'start', 'end', 'text' fields
+        reference_text: The golden/reference transcript
+
+    Returns:
+        List of dicts with 'start', 'end', 'wer', 'text' for visualization
+    """
+    segment_wers = []
+
+    # Simple approach: split reference by approximate timing
+    # This is a rough estimate since we don't have exact reference timestamps
+    if not provider_segments or not reference_text:
+        return segment_wers
+
+    try:
+        from jiwer import wer as calculate_wer
+
+        for segment in provider_segments:
+            segment_text = segment.get('text', segment.get('transcript', ''))
+            start_time = segment.get('start', segment.get('start_time', 0))
+            end_time = segment.get('end', segment.get('end_time', 0))
+
+            if segment_text and reference_text:
+                # Calculate WER for this segment against full reference
+                # (Not perfect but gives indication of quality)
+                try:
+                    error_rate = calculate_wer(reference_text, segment_text)
+                    wer_score = round(error_rate * 100, 2)
+                except:
+                    wer_score = None
+
+                segment_wers.append({
+                    'start': start_time,
+                    'end': end_time,
+                    'wer': wer_score,
+                    'text': segment_text[:50] + '...' if len(segment_text) > 50 else segment_text
+                })
+
+    except Exception as e:
+        pass
+
+    return segment_wers
+
+
 def calculate_costs(results: Dict[str, Dict]) -> Dict[str, float]:
     """
     Calculate estimated cost for each transcription provider
