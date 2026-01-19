@@ -616,9 +616,9 @@ class GeminiGoldenTranscript:
         self.gemini_api_key = api_key
         self.groq_api_key = groq_api_key
         genai.configure(api_key=api_key)
-        # Use gemini-1.5-flash-8b for higher rate limits on free tier
-        # flash-8b: RPM 15→4000, TPM 1M→4M, RPD 1500→4000
-        self.model = genai.GenerativeModel('gemini-1.5-flash-8b')
+        # Use gemini-2.5-flash-lite for highest rate limits on free tier
+        # Free tier: RPM 10 (vs gemini-3-flash: RPM 5, gemini-2.5-flash: RPM 5)
+        self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
 
     def generate_golden_transcript(self, transcripts: Dict[str, str]) -> Tuple[str, Dict]:
         """
