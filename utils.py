@@ -642,12 +642,15 @@ class GeminiGoldenTranscript:
                 'sources_count': len(transcripts),
                 'sources': list(transcripts.keys()),
                 'generation_successful': True,
-                'generator': 'Gemini 1.5 Flash'
+                'generator': 'Gemini 2.5 Flash Lite'
             }
 
             return golden_transcript, metadata
 
         except Exception as e:
+            # Log the detailed error
+            error_msg = f"Gemini Error: {type(e).__name__}: {str(e)}"
+            print(f"[ERROR] {error_msg}")  # Server-side log
             # Fallback to Groq if available
             if self.groq_api_key:
                 try:
@@ -817,7 +820,8 @@ def calculate_cer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
 
 def calculate_segment_wer(provider_segments: List[Dict], reference_text: str) -> List[Dict]:
     """
-    Calculate WER for each segment/timestamp
+    Calculate WER for each segment/timestamp by comparing segment text with corresponding
+    portion of reference text (estimated by word position)
 
     Args:
         provider_segments: List of segments with 'start', 'end', 'text' fields
@@ -828,36 +832,68 @@ def calculate_segment_wer(provider_segments: List[Dict], reference_text: str) ->
     """
     segment_wers = []
 
-    # Simple approach: split reference by approximate timing
-    # This is a rough estimate since we don't have exact reference timestamps
     if not provider_segments or not reference_text:
         return segment_wers
 
     try:
         from jiwer import wer as calculate_wer
 
+        # Split reference into words
+        ref_words = reference_text.split()
+        total_words = len(ref_words)
+
+        if total_words == 0:
+            return segment_wers
+
+        # Calculate cumulative word counts for segments
+        segment_word_counts = []
         for segment in provider_segments:
+            segment_text = segment.get('text', segment.get('transcript', ''))
+            word_count = len(segment_text.split())
+            segment_word_counts.append(word_count)
+
+        # Map each segment to approximate portion of reference
+        cumulative_words = 0
+        for idx, segment in enumerate(provider_segments):
             segment_text = segment.get('text', segment.get('transcript', ''))
             start_time = segment.get('start', segment.get('start_time', 0))
             end_time = segment.get('end', segment.get('end_time', 0))
 
-            if segment_text and reference_text:
-                # Calculate WER for this segment against full reference
-                # (Not perfect but gives indication of quality)
-                try:
-                    error_rate = calculate_wer(reference_text, segment_text)
-                    wer_score = round(error_rate * 100, 2)
-                except:
-                    wer_score = None
+            if not segment_text:
+                continue
 
-                segment_wers.append({
-                    'start': start_time,
-                    'end': end_time,
-                    'wer': wer_score,
-                    'text': segment_text[:50] + '...' if len(segment_text) > 50 else segment_text
-                })
+            # Calculate which portion of reference corresponds to this segment
+            segment_words = segment_word_counts[idx]
+
+            # Get corresponding words from reference (proportional mapping)
+            start_word_idx = cumulative_words
+            end_word_idx = min(cumulative_words + segment_words, total_words)
+
+            # Extract reference portion for this segment
+            ref_portion = ' '.join(ref_words[start_word_idx:end_word_idx])
+
+            # Calculate WER for this segment
+            try:
+                if ref_portion and segment_text:
+                    error_rate = calculate_wer(ref_portion, segment_text)
+                    wer_score = min(round(error_rate * 100, 2), 100.0)  # Cap at 100%
+                else:
+                    wer_score = 0.0
+            except:
+                wer_score = None
+
+            segment_wers.append({
+                'start': start_time,
+                'end': end_time,
+                'wer': wer_score,
+                'text': segment_text[:50] + '...' if len(segment_text) > 50 else segment_text,
+                'ref_text': ref_portion[:50] + '...' if len(ref_portion) > 50 else ref_portion
+            })
+
+            cumulative_words += segment_words
 
     except Exception as e:
+        print(f"[ERROR] calculate_segment_wer: {e}")
         pass
 
     return segment_wers

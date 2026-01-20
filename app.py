@@ -104,61 +104,19 @@ def sidebar_config():
 
     st.sidebar.markdown("---")
 
-    # Collapsible API Keys section
-    with st.sidebar.expander("🔐 API Keys (Advanced)", expanded=False):
-        st.markdown("**Configure your API keys below or use Streamlit secrets**")
+    # API keys are loaded from environment/secrets only
+    api_keys = {
+        'gemini': os.getenv('GEMINI_API_KEY', os.getenv('gemini', '')),
+        'elevenlabs': os.getenv('ELEVENLABS_API_KEY', os.getenv('elevenlabs', '')),
+        'gladia': os.getenv('GLADIA_API_KEY', os.getenv('gladia', '')),
+        'openai': os.getenv('OPENAI_API_KEY', os.getenv('openai', '')),
+        'groq': os.getenv('GROQ_API_KEY', os.getenv('groq', '')),
+        'behavioral': os.getenv('BEHAVIORAL_SIGNALS_API_KEY', os.getenv('Behavioral signals', '')),
+        'behavioral_url': os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v5/clients/10000215/processes/audio'),
+        'deepgram': os.getenv('DEEPGRAM_API_KEY', os.getenv('Deepgram', ''))
+    }
 
-        api_keys = {}
-
-        api_keys['gemini'] = st.text_input(
-            "Google Gemini API Key",
-            value=os.getenv('GEMINI_API_KEY', os.getenv('gemini', '')),
-            type="password",
-            help="Required for Golden Transcript generation"
-        )
-
-        api_keys['elevenlabs'] = st.text_input(
-            "ElevenLabs API Key",
-            value=os.getenv('ELEVENLABS_API_KEY', os.getenv('elevenlabs', '')),
-            type="password"
-        )
-
-        api_keys['gladia'] = st.text_input(
-            "Gladia API Key",
-            value=os.getenv('GLADIA_API_KEY', os.getenv('gladia', '')),
-            type="password"
-        )
-
-        api_keys['openai'] = st.text_input(
-            "OpenAI API Key",
-            value=os.getenv('OPENAI_API_KEY', os.getenv('openai', '')),
-            type="password"
-        )
-
-        api_keys['groq'] = st.text_input(
-            "Groq API Key",
-            value=os.getenv('GROQ_API_KEY', os.getenv('groq', '')),
-            type="password",
-            help="Groq provides free access to Whisper Large v3"
-        )
-
-        api_keys['behavioral'] = st.text_input(
-            "Behavioral Signals API Key",
-            value=os.getenv('BEHAVIORAL_SIGNALS_API_KEY', os.getenv('Behavioral signals', '')),
-            type="password"
-        )
-
-        api_keys['behavioral_url'] = st.text_input(
-            "Behavioral Signals URL",
-            value=os.getenv('BEHAVIORAL_SIGNALS_URL', 'https://api.behavioralsignals.com/v5/clients/10000215/processes/audio'),
-            help="API endpoint for Behavioral Signals (format: /v5/clients/{CID}/processes/audio)"
-        )
-
-        api_keys['deepgram'] = st.text_input(
-            "Deepgram API Key",
-            value=os.getenv('DEEPGRAM_API_KEY', os.getenv('Deepgram', '')),
-            type="password"
-        )
+    st.sidebar.info("🔐 API Keys are loaded from Streamlit secrets. Configure them in your Streamlit Cloud dashboard.")
 
     st.sidebar.markdown("---")
     st.sidebar.subheader("🎯 Select STT Providers")
@@ -228,17 +186,22 @@ def sidebar_config():
     st.sidebar.markdown("---")
     st.sidebar.subheader("📄 Manual Transcript (Optional)")
 
+    st.sidebar.markdown("Upload an existing transcript to compare:")
+
     manual_transcript = st.sidebar.text_area(
-        "Paste existing transcript",
-        height=100,
-        help="If you already have a transcript, paste it here to compare quality without API calls"
+        "Paste transcript here",
+        height=150,
+        placeholder="Example:\nSpeaker 1: Hello, how are you?\nSpeaker 2: I'm fine, thanks!",
+        help="Paste a transcript you already have. Format: plain text or with speaker labels"
     )
 
-    manual_provider_name = st.sidebar.text_input(
-        "Provider name for manual transcript",
-        value="Manual Transcript",
-        help="Name to display for your uploaded transcript"
-    )
+    manual_provider_name = None
+    if manual_transcript and manual_transcript.strip():
+        manual_provider_name = st.sidebar.text_input(
+            "Provider name",
+            value="Manual Transcript",
+            help="Name to display for your transcript"
+        )
 
     return api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name
 
@@ -363,7 +326,9 @@ def main():
 
                             # Show fallback info if used
                             if 'fallback' in generator.lower():
-                                st.info(f"ℹ️ Gemini failed, used fallback: {generator}")
+                                gemini_error = gen_metadata.get('gemini_error', 'Unknown error')
+                                st.error(f"❌ Gemini API Error: {gemini_error}")
+                                st.info(f"ℹ️ Using fallback: {generator}")
 
                             # Step 4: Calculate metrics
                             st.write("📊 Calculating quality metrics (WER, CER)...")
@@ -503,7 +468,28 @@ def main():
                     if result.get('success'):
                         st.markdown(f'<div class="provider-transcript">', unsafe_allow_html=True)
                         st.markdown(f"**Transcript:**")
-                        st.write(result.get('transcript', 'No transcript available'))
+
+                        # Try to format transcript with diarization if available
+                        metadata = result.get('metadata', {})
+                        utterances = metadata.get('utterances', [])
+
+                        if utterances and isinstance(utterances, list) and len(utterances) > 0:
+                            # Format with speakers
+                            formatted_text = ""
+                            for item in utterances:
+                                if isinstance(item, dict):
+                                    speaker = item.get('speaker', item.get('channel', 'Unknown'))
+                                    text = item.get('text', item.get('transcript', ''))
+                                    if text:
+                                        formatted_text += f"**Speaker {speaker}:** {text}\n\n"
+
+                            if formatted_text:
+                                st.markdown(formatted_text)
+                            else:
+                                st.write(result.get('transcript', 'No transcript available'))
+                        else:
+                            st.write(result.get('transcript', 'No transcript available'))
+
                         st.markdown('</div>', unsafe_allow_html=True)
 
                         # Metrics row
