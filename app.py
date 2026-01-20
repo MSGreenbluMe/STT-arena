@@ -264,7 +264,7 @@ def main():
         # Transcribe button
         col1, col2, col3 = st.columns([1, 2, 1])
         with col2:
-            if st.button("🚀 Start Transcription Arena", use_container_width=True, type="primary"):
+            if st.button("🚀 Start Transcription Arena", type="primary"):
                 with st.status("🎙️ STT Arena Processing...", expanded=True) as status:
                     # Step 1: Transcribe with all providers
                     st.write("🔄 Transcribing audio with enabled providers...")
@@ -447,7 +447,7 @@ def main():
                     })
 
             df_metrics = pd.DataFrame(metrics_data)
-            st.dataframe(df_metrics, use_container_width=True, hide_index=True)
+            st.dataframe(df_metrics, width='stretch', hide_index=True)
 
             # Show total cost
             if st.session_state.costs:
@@ -584,7 +584,7 @@ def main():
                                             hovermode='x unified'
                                         )
 
-                                        st.plotly_chart(fig, use_container_width=True)
+                                        st.plotly_chart(fig)
 
                                         # Show worst segments
                                         worst_segments = sorted(segment_wers, key=lambda x: x.get('wer', 0) if x.get('wer') is not None else 0, reverse=True)[:3]
@@ -682,7 +682,7 @@ def main():
             })
 
         df_history = pd.DataFrame(history_data)
-        st.dataframe(df_history, use_container_width=True, hide_index=True)
+        st.dataframe(df_history, width='stretch', hide_index=True)
 
         # Visualizations
         if len(st.session_state.transcription_history) > 1:
@@ -718,7 +718,7 @@ def main():
                         title='Word Error Rate Trends'
                     )
                     fig_wer.update_layout(yaxis_title="WER (%)", height=400)
-                    st.plotly_chart(fig_wer, use_container_width=True)
+                    st.plotly_chart(fig_wer)
 
                 with col2:
                     st.markdown("#### CER Over Time by Provider")
@@ -731,7 +731,7 @@ def main():
                         title='Character Error Rate Trends'
                     )
                     fig_cer.update_layout(yaxis_title="CER (%)", height=400)
-                    st.plotly_chart(fig_cer, use_container_width=True)
+                    st.plotly_chart(fig_cer)
 
                 # Cost analysis
                 st.markdown("#### 💰 Cost Analysis by Provider")
@@ -744,7 +744,7 @@ def main():
                     color='Provider'
                 )
                 fig_cost.update_layout(yaxis_title="Total Cost ($)", height=400, showlegend=False)
-                st.plotly_chart(fig_cost, use_container_width=True)
+                st.plotly_chart(fig_cost)
 
         # Export history button
         if st.button("📥 Download History as CSV"):
