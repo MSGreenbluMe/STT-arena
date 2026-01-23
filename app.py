@@ -20,7 +20,8 @@ from utils import (
     calculate_cer_scores,
     calculate_costs,
     calculate_segment_wer,
-    format_metadata_for_display
+    format_metadata_for_display,
+    extract_diarized_transcript
 )
 from database import STTArenaDB
 from qa_utils import (
@@ -337,12 +338,15 @@ def stt_arena_tab(api_keys, enabled_providers, uploaded_file, language, manual_t
                     if results:
                         st.write("✨ Generating Golden Transcript...")
 
-                        # Extract successful transcripts
-                        transcripts = {
-                            provider: data['transcript']
-                            for provider, data in results.items()
-                            if data.get('success') and data.get('transcript')
-                        }
+                        # Extract successful transcripts with diarization
+                        transcripts = {}
+                        for provider, data in results.items():
+                            if data.get('success') and data.get('transcript'):
+                                # Extract diarized version if available
+                                plain_transcript = data['transcript']
+                                metadata = data.get('metadata', {})
+                                diarized_transcript = extract_diarized_transcript(plain_transcript, metadata)
+                                transcripts[provider] = diarized_transcript
 
                         if transcripts:
                             # Initialize Gemini with Groq fallback
@@ -449,14 +453,14 @@ def stt_arena_tab(api_keys, enabled_providers, uploaded_file, language, manual_t
 
             # Golden Transcript Section
             if st.session_state.golden_transcript:
-                st.markdown("### ✨ Golden Transcript (Source of Truth)")
+                st.markdown("### ✨ Golden Transcript (Source of Truth with Speaker Diarization)")
                 st.markdown('<div class="golden-transcript">', unsafe_allow_html=True)
 
                 # Editable golden transcript
                 edited_golden = st.text_area(
-                    "You can edit the Golden Transcript if needed:",
+                    "You can edit the Golden Transcript if needed (speaker labels preserved):",
                     value=st.session_state.golden_transcript,
-                    height=200,
+                    height=300,
                     key="golden_edit"
                 )
 
@@ -552,28 +556,20 @@ def stt_arena_tab(api_keys, enabled_providers, uploaded_file, language, manual_t
 
                     if result.get('success'):
                         st.markdown(f'<div class="provider-transcript">', unsafe_allow_html=True)
-                        st.markdown(f"**Transcript:**")
+                        st.markdown(f"**Transcript (with speaker diarization):**")
 
-                        # Try to format transcript with diarization if available
+                        # Extract diarized transcript if available
                         metadata = result.get('metadata', {})
-                        utterances = metadata.get('utterances', [])
+                        plain_transcript = result.get('transcript', '')
+                        diarized_transcript = extract_diarized_transcript(plain_transcript, metadata)
 
-                        if utterances and isinstance(utterances, list) and len(utterances) > 0:
-                            # Format with speakers
-                            formatted_text = ""
-                            for item in utterances:
-                                if isinstance(item, dict):
-                                    speaker = item.get('speaker', item.get('channel', 'Unknown'))
-                                    text = item.get('text', item.get('transcript', ''))
-                                    if text:
-                                        formatted_text += f"**Speaker {speaker}:** {text}\n\n"
-
-                            if formatted_text:
-                                st.markdown(formatted_text)
-                            else:
-                                st.write(result.get('transcript', 'No transcript available'))
-                        else:
-                            st.write(result.get('transcript', 'No transcript available'))
+                        # Display with proper formatting for speakers
+                        st.text_area(
+                            "Transcript",
+                            value=diarized_transcript,
+                            height=300,
+                            label_visibility="collapsed"
+                        )
 
                         st.markdown('</div>', unsafe_allow_html=True)
 

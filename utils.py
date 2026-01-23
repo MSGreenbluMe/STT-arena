@@ -741,21 +741,28 @@ Your task is to create the MOST ACCURATE transcription possible by analyzing mul
 CRITICAL INSTRUCTIONS:
 1. Carefully analyze ALL provided transcripts word-by-word
 2. Look for CONSENSUS across multiple sources - if 3+ providers agree, that's likely correct
-3. Preserve DIACRITICS correctly (ľščťžýáíéúôäň etc.) - this is crucial for Slovak/Czech
-4. Use context clues to resolve ambiguities
-5. Consider phonetic similarities when outputs differ
-6. Maintain proper grammar, punctuation, and formatting
-7. For Slovak/Czech: Pay special attention to:
+3. PRESERVE SPEAKER LABELS - if transcripts have "Speaker 0:", "Speaker 1:" etc., KEEP these labels in the output
+4. Preserve DIACRITICS correctly (ľščťžýáíéúôäň etc.) - this is crucial for Slovak/Czech
+5. Use context clues to resolve ambiguities
+6. Consider phonetic similarities when outputs differ
+7. Maintain proper grammar, punctuation, and formatting
+8. For Slovak/Czech: Pay special attention to:
    - Diacritics (č vs c, š vs s, ž vs z, ý vs y, etc.)
    - Similar sounding words (deň/den, máte/mate, dobrý/dobry)
    - Proper names and company names
-8. Output ONLY the corrected transcript text - NO explanations, NO commentary, NO metadata
+9. Output ONLY the corrected transcript text - NO explanations, NO commentary, NO metadata
+
+SPEAKER DIARIZATION:
+- If transcripts contain "Speaker X:" labels, preserve them in your output
+- Format: "Speaker 0: [text]\n\nSpeaker 1: [text]"
+- If no speaker labels present, output continuous text
 
 QUALITY CRITERIA:
 - Every word should match the actual spoken audio
 - Diacritics must be 100% accurate
 - Natural Slovak/Czech grammar and syntax
 - Professional formatting (proper capitalization, punctuation)
+- Speaker labels preserved where present
 
 Here are the transcripts from different STT providers:
 
@@ -769,7 +776,7 @@ Here are the transcripts from different STT providers:
 
         prompt += f"\n{'='*60}\n"
         prompt += "\nNow, synthesize these transcripts into ONE highly accurate Golden Transcript.\n"
-        prompt += "Remember: ONLY the transcript text, NO explanations:"
+        prompt += "Remember: PRESERVE speaker labels if present, ONLY the transcript text, NO explanations:"
 
         return prompt
 
@@ -1045,3 +1052,66 @@ def transcribe_with_all_providers(
 def format_metadata_for_display(metadata: Dict) -> str:
     """Format metadata dictionary for nice display"""
     return json.dumps(metadata, indent=2, ensure_ascii=False)
+
+
+def extract_diarized_transcript(transcript: str, metadata: Dict) -> str:
+    """
+    Extract speaker-separated transcript from metadata if available
+    Returns formatted transcript with speaker labels, or plain transcript if no diarization
+
+    Supports:
+    - ElevenLabs: words array with speaker info
+    - Gladia: utterances array
+    - Deepgram: utterances array
+    - OpenAI/Groq: fallback to plain transcript (no diarization)
+    """
+    # Try utterances first (Gladia, Deepgram format)
+    utterances = metadata.get('utterances', [])
+    if utterances and isinstance(utterances, list) and len(utterances) > 0:
+        formatted_lines = []
+        for item in utterances:
+            if isinstance(item, dict):
+                speaker = item.get('speaker', item.get('channel', None))
+                text = item.get('text', item.get('transcript', ''))
+
+                if speaker is not None and text:
+                    formatted_lines.append(f"Speaker {speaker}: {text}")
+                elif text:
+                    formatted_lines.append(text)
+
+        if formatted_lines:
+            return '\n\n'.join(formatted_lines)
+
+    # Try words array with speaker info (ElevenLabs format)
+    words = metadata.get('words', [])
+    if words and isinstance(words, list) and len(words) > 0:
+        # Group words by speaker
+        current_speaker = None
+        speaker_texts = []
+        current_text = []
+
+        for word_info in words:
+            if isinstance(word_info, dict):
+                speaker = word_info.get('speaker', word_info.get('speaker_id'))
+                word = word_info.get('word', word_info.get('text', ''))
+
+                if speaker is not None:
+                    if speaker != current_speaker:
+                        # New speaker, save previous
+                        if current_text and current_speaker is not None:
+                            speaker_texts.append(f"Speaker {current_speaker}: {' '.join(current_text)}")
+                        current_speaker = speaker
+                        current_text = [word] if word else []
+                    else:
+                        if word:
+                            current_text.append(word)
+
+        # Add last speaker
+        if current_text and current_speaker is not None:
+            speaker_texts.append(f"Speaker {current_speaker}: {' '.join(current_text)}")
+
+        if speaker_texts:
+            return '\n\n'.join(speaker_texts)
+
+    # Fallback: return plain transcript
+    return transcript
