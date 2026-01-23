@@ -22,6 +22,7 @@ from utils import (
     calculate_segment_wer,
     format_metadata_for_display
 )
+from database import STTArenaDB
 
 # Load environment variables
 load_dotenv()
@@ -96,6 +97,12 @@ def initialize_session_state():
         st.session_state.audio_file_path = None
     if 'transcription_history' not in st.session_state:
         st.session_state.transcription_history = []
+    if 'db' not in st.session_state:
+        st.session_state.db = STTArenaDB()
+    if 'current_audio_id' not in st.session_state:
+        st.session_state.current_audio_id = None
+    if 'audio_tags' not in st.session_state:
+        st.session_state.audio_tags = []
 
 
 def sidebar_config():
@@ -182,6 +189,35 @@ def sidebar_config():
         help="Upload a call center audio recording"
     )
 
+    # Tags for test scenarios
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🏷️ Tags (Optional)")
+    st.sidebar.markdown("Add tags to organize test scenarios:")
+
+    # Get existing tags from database
+    existing_tags = st.session_state.db.get_all_tags() if 'db' in st.session_state else []
+
+    # Tag input
+    tags_input = st.sidebar.text_input(
+        "Enter tags (comma-separated)",
+        placeholder="e.g., test-call-1, customer-support",
+        help="Tags help you find and organize repeated test calls"
+    )
+
+    tags = []
+    if tags_input:
+        tags = [tag.strip() for tag in tags_input.split(',') if tag.strip()]
+
+    # Show existing tags
+    if existing_tags:
+        st.sidebar.caption(f"Existing tags: {', '.join(existing_tags[:5])}")
+
+    notes = st.sidebar.text_area(
+        "Notes (Optional)",
+        placeholder="Any notes about this test...",
+        height=80
+    )
+
     # Manual transcript upload option
     st.sidebar.markdown("---")
     st.sidebar.subheader("📄 Manual Transcript (Optional)")
@@ -203,33 +239,22 @@ def sidebar_config():
             help="Name to display for your transcript"
         )
 
-    return api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name
+    return api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name, tags, notes
 
 
-def main():
-    """Main application logic"""
-    initialize_session_state()
-
-    # Header
-    st.markdown('<div class="main-header">🎙️ STT Arena</div>', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="sub-header">Compare Speech-to-Text models with AI-powered Golden Transcript</div>',
-        unsafe_allow_html=True
-    )
-
-    # Sidebar configuration
-    api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name = sidebar_config()
+def stt_arena_tab(api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name, tags, notes):
+    """STT Arena tab - transcription and evaluation"""
 
     # Check if Gemini API key is provided
     if not api_keys['gemini']:
         st.warning("⚠️ Please provide a Google Gemini API Key in the sidebar to generate Golden Transcripts.")
         st.info("💡 Tip: Create a `.env` file with your API keys or enter them in the sidebar.")
-        st.stop()
+        return
 
     # Check if at least one provider is enabled
     if not any(enabled_providers.values()):
         st.info("👈 Please select at least one STT provider from the sidebar and upload an audio file.")
-        st.stop()
+        return
 
     # Audio file handling
     if uploaded_file is not None:
@@ -339,8 +364,59 @@ def main():
                             st.session_state.wer_scores = wer_scores
                             st.session_state.cer_scores = cer_scores
 
-                            # Step 5: Save to history
-                            st.write("💾 Saving to history...")
+                            # Step 5: Save to history and database
+                            st.write("💾 Saving to history and database...")
+
+                            # Save to database
+                            try:
+                                # Save audio file
+                                audio_bytes = uploaded_file.getvalue()
+                                audio_id = st.session_state.db.save_audio_file(
+                                    filename=uploaded_file.name,
+                                    file_bytes=audio_bytes,
+                                    duration_seconds=None,  # TODO: extract from metadata
+                                    language=language,
+                                    tags=tags if tags else None,
+                                    notes=notes if notes else None
+                                )
+                                st.session_state.current_audio_id = audio_id
+
+                                # Save transcriptions
+                                transcription_ids = {}
+                                for provider_name, result in results.items():
+                                    trans_id = st.session_state.db.save_transcription(
+                                        audio_file_id=audio_id,
+                                        provider_name=provider_name,
+                                        result=result
+                                    )
+                                    transcription_ids[provider_name] = trans_id
+
+                                # Save evaluation (golden transcript)
+                                eval_id = st.session_state.db.save_evaluation(
+                                    audio_file_id=audio_id,
+                                    golden_transcript=golden_transcript,
+                                    golden_generator=generator
+                                )
+
+                                # Save evaluation scores
+                                for provider_name in transcripts.keys():
+                                    st.session_state.db.save_evaluation_scores(
+                                        evaluation_id=eval_id,
+                                        transcription_id=transcription_ids.get(provider_name),
+                                        provider_name=provider_name,
+                                        wer_score=wer_scores.get(provider_name),
+                                        cer_score=cer_scores.get(provider_name),
+                                        cost_usd=costs.get(provider_name)
+                                    )
+
+                                st.write(f"✅ Saved to database (ID: {audio_id})")
+                                if tags:
+                                    st.write(f"🏷️ Tags: {', '.join(tags)}")
+
+                            except Exception as db_error:
+                                st.warning(f"⚠️ Database save failed: {db_error}")
+
+                            # Save to session history (legacy)
                             history_entry = {
                                 'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'),
                                 'audio_file': uploaded_file.name if uploaded_file else 'Unknown',
@@ -757,6 +833,127 @@ def main():
                 file_name=f"stt_arena_history_{time.strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv"
             )
+
+def qa_arena_tab():
+    """QA Arena tab - LLM question answering evaluation"""
+    st.info("🚧 QA Arena coming soon! This will test LLM providers (Gemini, Groq, Mistral) on question-answering tasks.")
+    st.markdown("""
+    **Planned features:**
+    - Select transcripts from database (by tag/recent)
+    - Auto-generate questions from transcript
+    - Test multiple LLM providers in parallel
+    - Quality scoring and cost-effectiveness analysis
+    - LLM Leaderboard
+    """)
+
+
+def analytics_tab():
+    """Analytics tab - provider leaderboards and historical trends"""
+    st.markdown("## 📊 Analytics & Leaderboards")
+
+    db = st.session_state.db
+
+    # Provider Statistics
+    st.markdown("### 🏆 STT Provider Leaderboard")
+    provider_stats = db.get_provider_stats()
+
+    if provider_stats:
+        df_stats = pd.DataFrame(provider_stats)
+        # Sort by cost effectiveness (higher is better)
+        df_stats = df_stats.sort_values('avg_cost_effectiveness', ascending=False)
+
+        st.dataframe(df_stats, width='stretch', hide_index=True)
+
+        # Visualizations
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("#### Average WER by Provider")
+            fig_wer = px.bar(
+                df_stats,
+                x='provider_name',
+                y='avg_wer',
+                title='Average Word Error Rate',
+                color='avg_wer',
+                color_continuous_scale='RdYlGn_r'
+            )
+            st.plotly_chart(fig_wer)
+
+        with col2:
+            st.markdown("#### Cost Effectiveness")
+            fig_cost_eff = px.bar(
+                df_stats,
+                x='provider_name',
+                y='avg_cost_effectiveness',
+                title='Cost Effectiveness Score (Higher = Better)',
+                color='avg_cost_effectiveness',
+                color_continuous_scale='Greens'
+            )
+            st.plotly_chart(fig_cost_eff)
+    else:
+        st.info("No evaluations in database yet. Run STT Arena to generate data.")
+
+    # Recent Evaluations
+    st.markdown("### 📜 Recent Evaluations")
+    recent_evals = db.get_recent_evaluations(limit=20)
+
+    if recent_evals:
+        df_recent = pd.DataFrame(recent_evals)
+        st.dataframe(df_recent, width='stretch', hide_index=True)
+
+        # Export button
+        if st.button("📥 Export All Data to CSV"):
+            try:
+                db.export_to_csv('evaluations', 'evaluations_export.csv')
+                db.export_to_csv('evaluation_scores', 'scores_export.csv')
+                st.success("✅ Exported to evaluations_export.csv and scores_export.csv")
+            except Exception as e:
+                st.error(f"Export failed: {e}")
+    else:
+        st.info("No recent evaluations found.")
+
+    # Tag filter
+    st.markdown("### 🏷️ Filter by Tags")
+    all_tags = db.get_all_tags()
+
+    if all_tags:
+        selected_tag = st.selectbox("Select tag", ["All"] + all_tags)
+
+        if selected_tag != "All":
+            tagged_files = db.get_audio_files_by_tag(selected_tag)
+            st.write(f"Found {len(tagged_files)} files with tag '{selected_tag}'")
+            if tagged_files:
+                df_tagged = pd.DataFrame(tagged_files)
+                st.dataframe(df_tagged, width='stretch', hide_index=True)
+    else:
+        st.info("No tags found. Add tags when uploading audio files.")
+
+
+def main():
+    """Main application with tab-based navigation"""
+    initialize_session_state()
+
+    # Header
+    st.markdown('<div class="main-header">🎙️ STT Arena</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="sub-header">Compare Speech-to-Text models with AI-powered Golden Transcript</div>',
+        unsafe_allow_html=True
+    )
+
+    # Sidebar configuration
+    api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name, tags, notes = sidebar_config()
+
+    # Create tabs
+    tab1, tab2, tab3 = st.tabs(["🎙️ STT Arena", "🤖 QA Arena", "📊 Analytics"])
+
+    with tab1:
+        stt_arena_tab(api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name, tags, notes)
+
+    with tab2:
+        qa_arena_tab()
+
+    with tab3:
+        analytics_tab()
 
     # Footer
     st.markdown("---")
