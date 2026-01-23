@@ -23,6 +23,13 @@ from utils import (
     format_metadata_for_display
 )
 from database import STTArenaDB
+from qa_utils import (
+    GeminiLLM,
+    GroqLLM,
+    MistralLLM,
+    QuestionGenerator,
+    calculate_llm_costs
+)
 
 # Load environment variables
 load_dotenv()
@@ -834,17 +841,292 @@ def stt_arena_tab(api_keys, enabled_providers, uploaded_file, language, manual_t
                 mime="text/csv"
             )
 
-def qa_arena_tab():
+def qa_arena_tab(api_keys):
     """QA Arena tab - LLM question answering evaluation"""
-    st.info("🚧 QA Arena coming soon! This will test LLM providers (Gemini, Groq, Mistral) on question-answering tasks.")
-    st.markdown("""
-    **Planned features:**
-    - Select transcripts from database (by tag/recent)
-    - Auto-generate questions from transcript
-    - Test multiple LLM providers in parallel
-    - Quality scoring and cost-effectiveness analysis
-    - LLM Leaderboard
-    """)
+    st.markdown("## 🤖 QA Arena - LLM Testing")
+
+    db = st.session_state.db
+
+    # Check API keys
+    if not api_keys['gemini']:
+        st.warning("⚠️ Gemini API key required for QA Arena")
+        return
+
+    # Step 1: Select transcript source
+    st.markdown("### 📝 Step 1: Select Transcript")
+
+    source_type = st.radio(
+        "Transcript source:",
+        ["From Database (by tag)", "Paste manually"],
+        horizontal=True
+    )
+
+    transcript_text = ""
+    transcript_source = ""
+
+    if source_type == "From Database (by tag)":
+        all_tags = db.get_all_tags()
+
+        if all_tags:
+            selected_tag = st.selectbox("Select tag:", all_tags)
+
+            if selected_tag:
+                tagged_files = db.get_audio_files_by_tag(selected_tag)
+
+                if tagged_files:
+                    file_options = {f"{f['filename']} (ID: {f['id']})": f['id'] for f in tagged_files}
+                    selected_file_label = st.selectbox("Select audio file:", list(file_options.keys()))
+                    selected_file_id = file_options[selected_file_label]
+
+                    # Get transcript from database
+                    # For now, use the most recent transcription
+                    # TODO: Add provider selection
+                    st.info(f"📂 Loading transcripts for audio file ID: {selected_file_id}")
+
+                    # Get best transcript (lowest WER)
+                    cursor = db.conn.cursor()
+                    cursor.execute("""
+                        SELECT t.provider_name, t.transcript_text, es.wer_score
+                        FROM transcriptions t
+                        LEFT JOIN evaluation_scores es ON t.id = es.transcription_id
+                        WHERE t.audio_file_id = ? AND t.success = 1
+                        ORDER BY es.wer_score ASC
+                        LIMIT 1
+                    """, (selected_file_id,))
+
+                    result = cursor.fetchone()
+
+                    if result:
+                        provider_name, transcript_text, wer = result
+                        transcript_source = f"{provider_name} (WER: {wer}%)"
+                        st.success(f"✅ Using transcript from: {transcript_source}")
+                    else:
+                        st.error("No transcripts found for this file.")
+                else:
+                    st.info(f"No files found with tag '{selected_tag}'")
+        else:
+            st.info("No tags in database. Run STT Arena first to generate transcripts.")
+
+    else:  # Paste manually
+        transcript_text = st.text_area(
+            "Paste transcript here:",
+            height=200,
+            placeholder="Enter the transcript you want to test..."
+        )
+        transcript_source = "Manual input"
+
+    if not transcript_text:
+        st.info("👈 Select or paste a transcript to continue")
+        return
+
+    # Show transcript preview
+    with st.expander("📄 View Transcript"):
+        st.text_area("Transcript preview:", transcript_text, height=150, disabled=True)
+
+    st.markdown("---")
+
+    # Step 2: Questions
+    st.markdown("### ❓ Step 2: Questions")
+
+    question_mode = st.radio(
+        "Question source:",
+        ["Auto-generate (Gemini)", "Manual input"],
+        horizontal=True
+    )
+
+    questions = []
+
+    if question_mode == "Auto-generate (Gemini)":
+        num_questions = st.slider("Number of questions:", 1, 10, 5)
+
+        if st.button("🎲 Generate Questions"):
+            with st.spinner("Generating questions..."):
+                try:
+                    generator = QuestionGenerator(api_keys['gemini'])
+                    questions = generator.generate_questions(transcript_text, num_questions)
+                    st.session_state.qa_questions = questions
+                    st.success(f"✅ Generated {len(questions)} questions")
+                except Exception as e:
+                    st.error(f"Question generation failed: {e}")
+
+        if 'qa_questions' in st.session_state:
+            questions = st.session_state.qa_questions
+
+    else:  # Manual input
+        st.markdown("Enter questions (one per line):")
+        questions_text = st.text_area(
+            "Questions:",
+            height=150,
+            placeholder="What was the customer's main issue?\nHow was it resolved?\nWhat was the customer's sentiment?"
+        )
+
+        if questions_text:
+            questions = [
+                {"question": q.strip(), "type": "manual"}
+                for q in questions_text.split('\n')
+                if q.strip()
+            ]
+
+    if questions:
+        st.markdown(f"**📋 Questions to test ({len(questions)}):**")
+        for idx, q in enumerate(questions, 1):
+            st.write(f"{idx}. {q['question']} *({q['type']})*")
+
+        st.markdown("---")
+
+        # Step 3: Select LLM providers
+        st.markdown("### 🤖 Step 3: Select LLM Providers")
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            use_gemini = st.checkbox("Gemini", value=True, disabled=not api_keys['gemini'])
+            if use_gemini:
+                gemini_model = st.selectbox(
+                    "Gemini model:",
+                    ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"]
+                )
+
+        with col2:
+            use_groq = st.checkbox("Groq (FREE)", value=bool(api_keys.get('groq')), disabled=not api_keys.get('groq'))
+            if use_groq:
+                groq_model = st.selectbox(
+                    "Groq model:",
+                    ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "mixtral-8x7b-32768"]
+                )
+
+        with col3:
+            mistral_key = os.getenv('MISTRAL_API_KEY', '')
+            use_mistral = st.checkbox("Mistral", value=bool(mistral_key), disabled=not bool(mistral_key))
+            if use_mistral:
+                mistral_model = st.selectbox(
+                    "Mistral model:",
+                    ["mistral-small-latest", "mistral-large-latest", "open-mistral-7b"]
+                )
+
+        # Step 4: Run QA Arena
+        if st.button("🚀 Start QA Arena", type="primary"):
+            with st.status("🤖 QA Arena Processing...", expanded=True) as status:
+                all_results = {}
+
+                # Test each LLM provider
+                if use_gemini:
+                    st.write(f"🔄 Testing {gemini_model}...")
+                    llm = GeminiLLM(api_keys['gemini'], gemini_model)
+                    provider_results = []
+
+                    for q in questions:
+                        result = llm.ask_question(transcript_text, q['question'])
+                        provider_results.append(result)
+
+                    all_results[f"Gemini ({gemini_model})"] = provider_results
+
+                if use_groq:
+                    st.write(f"🔄 Testing {groq_model}...")
+                    llm = GroqLLM(api_keys['groq'], groq_model)
+                    provider_results = []
+
+                    for q in questions:
+                        result = llm.ask_question(transcript_text, q['question'])
+                        provider_results.append(result)
+
+                    all_results[f"Groq ({groq_model})"] = provider_results
+
+                if use_mistral:
+                    st.write(f"🔄 Testing {mistral_model}...")
+                    llm = MistralLLM(mistral_key, mistral_model)
+                    provider_results = []
+
+                    for q in questions:
+                        result = llm.ask_question(transcript_text, q['question'])
+                        provider_results.append(result)
+
+                    all_results[f"Mistral ({mistral_model})"] = provider_results
+
+                st.session_state.qa_results = all_results
+                status.update(label="✅ QA Arena Complete!", state="complete")
+
+        # Display results
+        if 'qa_results' in st.session_state:
+            st.markdown("---")
+            st.markdown("## 🏆 QA Arena Results")
+
+            all_results = st.session_state.qa_results
+
+            # Summary metrics
+            st.markdown("### 📊 Performance Metrics")
+
+            metrics_data = []
+            for provider_name, results in all_results.items():
+                success_count = sum(1 for r in results if r.get('success'))
+                avg_time = sum(r.get('processing_time', 0) for r in results) / len(results) if results else 0
+                total_tokens = sum(r.get('tokens_used', 0) for r in results if r.get('success'))
+
+                # Calculate cost
+                # Create temporary dict for cost calculation
+                cost_results = {}
+                if results:
+                    cost_results[provider_name] = {
+                        'success': True,
+                        'model': results[0].get('model', ''),
+                        'tokens_used': total_tokens
+                    }
+                costs = calculate_llm_costs(cost_results)
+                total_cost = costs.get(provider_name, 0)
+
+                metrics_data.append({
+                    'Provider': provider_name,
+                    'Success Rate': f"{success_count}/{len(results)}",
+                    'Avg Time (s)': f"{avg_time:.2f}",
+                    'Total Tokens': total_tokens,
+                    'Cost': f"${total_cost:.6f}" if total_cost else "FREE"
+                })
+
+            df_metrics = pd.DataFrame(metrics_data)
+            st.dataframe(df_metrics, width='stretch', hide_index=True)
+
+            # Detailed answers
+            st.markdown("### 📝 Detailed Answers")
+
+            for idx, question_data in enumerate(questions, 1):
+                st.markdown(f"#### Question {idx}: {question_data['question']}")
+
+                # Create tabs for each provider
+                provider_names = list(all_results.keys())
+                if provider_names:
+                    answer_tabs = st.tabs(provider_names)
+
+                    for tab, provider_name in zip(answer_tabs, provider_names):
+                        with tab:
+                            result = all_results[provider_name][idx - 1]
+
+                            if result.get('success'):
+                                st.markdown(f"**Answer:**")
+                                st.write(result['answer'])
+
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Time", f"{result['processing_time']:.2f}s")
+                                with col2:
+                                    st.metric("Tokens", result.get('tokens_used', 'N/A'))
+                                with col3:
+                                    # Calculate cost for this single answer
+                                    single_cost_results = {
+                                        provider_name: {
+                                            'success': True,
+                                            'model': result.get('model', ''),
+                                            'tokens_used': result.get('tokens_used', 0)
+                                        }
+                                    }
+                                    single_costs = calculate_llm_costs(single_cost_results)
+                                    cost = single_costs.get(provider_name, 0)
+                                    st.metric("Cost", f"${cost:.6f}" if cost else "FREE")
+                            else:
+                                st.error(f"❌ Error: {result.get('error', 'Unknown error')}")
+
+                st.markdown("---")
+    else:
+        st.info("Generate or enter questions to continue")
 
 
 def analytics_tab():
@@ -950,7 +1232,7 @@ def main():
         stt_arena_tab(api_keys, enabled_providers, uploaded_file, language, manual_transcript, manual_provider_name, tags, notes)
 
     with tab2:
-        qa_arena_tab()
+        qa_arena_tab(api_keys)
 
     with tab3:
         analytics_tab()
