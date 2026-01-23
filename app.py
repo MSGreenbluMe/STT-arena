@@ -314,9 +314,11 @@ def main():
 
                         if transcripts:
                             # Initialize Gemini with Groq fallback
+                            # Using gemini-2.5-flash for better quality (balanced speed/quality)
                             gemini = GeminiGoldenTranscript(
                                 api_keys['gemini'],
-                                groq_api_key=api_keys.get('groq')
+                                groq_api_key=api_keys.get('groq'),
+                                model_name='gemini-2.5-flash'
                             )
                             golden_transcript, gen_metadata = gemini.generate_golden_transcript(transcripts)
                             st.session_state.golden_transcript = golden_transcript

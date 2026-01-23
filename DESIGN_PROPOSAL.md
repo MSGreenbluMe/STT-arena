@@ -245,37 +245,56 @@ cost_effectiveness = (quality_score / 100) / cost_per_answer
 
 ---
 
-## 4. UI CHANGES
+## 4. UI CHANGES - FINAL DESIGN
 
-### Nová štruktúra aplikácie
+### Nová štruktúra aplikácie (TABS)
 ```
 app.py (Main)
-├── Tab 1: STT Arena (existing)
-│   ├── Ground Truth upload (NEW)
-│   └── WER proti Ground Truth (FIXED)
-├── Tab 2: QA Arena (NEW)
-│   ├── Select transcript source
-│   ├── Question generation/upload
-│   ├── LLM provider selection
-│   └── Results comparison
-├── Tab 3: Analytics & Database (NEW)
-│   ├── Historical data
-│   ├── Provider leaderboards
-│   ├── Cost analysis over time
+├── Tab 1: 🎙️ STT Arena
+│   ├── Audio upload
+│   ├── Provider selection
+│   ├── Transcription results
+│   ├── Golden Transcript (AI synthesis)
+│   ├── Ground Truth upload (OPTIONAL - for accurate WER)
+│   ├── WER/CER metrics (normalized)
+│   └── Save to database (with tags)
+│
+├── Tab 2: 🤖 QA Arena (SEPARATE - not mixed!)
+│   ├── Select audio file from DB (by tag/recent)
+│   ├── Select transcript source (which provider)
+│   ├── Question generation:
+│   │   ├── Auto-generate (Gemini)
+│   │   └── Manual input
+│   ├── LLM provider selection:
+│   │   ├── Gemini (2.5-flash, 2.5-pro)
+│   │   ├── Groq (llama-3.3-70b, mixtral)
+│   │   └── Mistral (small, large)
+│   ├── Golden Answer generation (Gemini Pro)
+│   ├── Answer evaluation & scoring
+│   └── LLM Leaderboard (Quality / Cost)
+│
+├── Tab 3: 📊 Analytics
+│   ├── Provider Leaderboards:
+│   │   ├── STT Leaderboard (WER, CER, Cost Effectiveness)
+│   │   └── LLM Leaderboard (Quality, Speed, Cost Effectiveness)
+│   ├── Historical trends (charts over time)
+│   ├── Tag-based filtering
+│   ├── Cost analysis
 │   └── Export to CSV/JSON
-└── Tab 4: Settings
-    └── API keys, DB settings
+│
+└── Tab 4: ⚙️ Settings
+    ├── API keys status (loaded from secrets)
+    ├── Database management
+    ├── Clear history
+    └── Model selection (Gemini model)
 ```
 
-### Sidebar Updates
-```python
-# STT Arena Mode
-st.sidebar.radio("Mode", [
-    "🎙️ STT Arena",
-    "🤖 QA Arena",
-    "📊 Analytics"
-])
-```
+### WHY SEPARATE TABS?
+- ✅ **Clear separation** of concerns (STT testing vs QA testing)
+- ✅ **No UI clutter** - each tab focused on one task
+- ✅ **Better workflow** - do STT first, then QA on saved results
+- ✅ **Independent** - can use QA Arena without running STT every time
+- ✅ **Scalable** - easy to add more features later
 
 ---
 

@@ -9,7 +9,7 @@ import requests
 import mimetypes
 from typing import Dict, List, Optional, Tuple
 import google.generativeai as genai
-from jiwer import wer
+from jiwer import wer, cer, Compose, RemovePunctuation, RemoveMultipleSpaces, Strip, ToLowerCase
 import json
 
 
@@ -612,13 +612,17 @@ class DeepgramSTT(STTProvider):
 class GeminiGoldenTranscript:
     """Generate Golden Transcript using Google Gemini (with Groq fallback)"""
 
-    def __init__(self, api_key: str, groq_api_key: str = None):
+    def __init__(self, api_key: str, groq_api_key: str = None, model_name: str = 'gemini-2.5-flash'):
         self.gemini_api_key = api_key
         self.groq_api_key = groq_api_key
         genai.configure(api_key=api_key)
-        # Use gemini-2.5-flash-lite for highest rate limits on free tier
-        # Free tier: RPM 10 (vs gemini-3-flash: RPM 5, gemini-2.5-flash: RPM 5)
-        self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        # Use gemini-2.5-flash for better quality (5 RPM free tier)
+        # Alternative models:
+        # - gemini-2.5-flash-lite: 10 RPM (faster, lower quality)
+        # - gemini-2.5-flash: 5 RPM (balanced, recommended)
+        # - gemini-2.5-pro: 2 RPM (best quality, slowest)
+        self.model_name = model_name
+        self.model = genai.GenerativeModel(model_name)
 
     def generate_golden_transcript(self, transcripts: Dict[str, str]) -> Tuple[str, Dict]:
         """
@@ -642,7 +646,7 @@ class GeminiGoldenTranscript:
                 'sources_count': len(transcripts),
                 'sources': list(transcripts.keys()),
                 'generation_successful': True,
-                'generator': 'Gemini 2.5 Flash Lite'
+                'generator': f'Gemini ({self.model_name})'
             }
 
             return golden_transcript, metadata
@@ -730,17 +734,28 @@ class GeminiGoldenTranscript:
     def _build_prompt(self, transcripts: Dict[str, str]) -> str:
         """Build the prompt for Gemini to generate golden transcript"""
 
-        prompt = """You are an expert transcriptionist with years of experience in call center audio analysis.
+        prompt = """You are an expert transcriptionist specializing in Czech and Slovak languages with years of experience in call center audio analysis.
 
 Your task is to create the MOST ACCURATE transcription possible by analyzing multiple Speech-to-Text outputs from different providers. These transcripts were generated from the same audio file but contain errors and inconsistencies.
 
-Instructions:
-1. Carefully analyze all provided transcripts
-2. Look for consensus across multiple sources
-3. Use context clues to resolve ambiguities
-4. Consider phonetic similarities when outputs differ
-5. Maintain proper grammar, punctuation, and formatting
-6. Output ONLY the corrected transcript text - no explanations or commentary
+CRITICAL INSTRUCTIONS:
+1. Carefully analyze ALL provided transcripts word-by-word
+2. Look for CONSENSUS across multiple sources - if 3+ providers agree, that's likely correct
+3. Preserve DIACRITICS correctly (ľščťžýáíéúôäň etc.) - this is crucial for Slovak/Czech
+4. Use context clues to resolve ambiguities
+5. Consider phonetic similarities when outputs differ
+6. Maintain proper grammar, punctuation, and formatting
+7. For Slovak/Czech: Pay special attention to:
+   - Diacritics (č vs c, š vs s, ž vs z, ý vs y, etc.)
+   - Similar sounding words (deň/den, máte/mate, dobrý/dobry)
+   - Proper names and company names
+8. Output ONLY the corrected transcript text - NO explanations, NO commentary, NO metadata
+
+QUALITY CRITERIA:
+- Every word should match the actual spoken audio
+- Diacritics must be 100% accurate
+- Natural Slovak/Czech grammar and syntax
+- Professional formatting (proper capitalization, punctuation)
 
 Here are the transcripts from different STT providers:
 
@@ -753,7 +768,8 @@ Here are the transcripts from different STT providers:
             prompt += f"{transcript}\n"
 
         prompt += f"\n{'='*60}\n"
-        prompt += "\nNow, synthesize these transcripts into ONE highly accurate Golden Transcript:"
+        prompt += "\nNow, synthesize these transcripts into ONE highly accurate Golden Transcript.\n"
+        prompt += "Remember: ONLY the transcript text, NO explanations:"
 
         return prompt
 
@@ -761,6 +777,7 @@ Here are the transcripts from different STT providers:
 def calculate_wer_scores(transcripts: Dict[str, str], reference: str) -> Dict[str, float]:
     """
     Calculate Word Error Rate (WER) for each transcript against the reference
+    Uses text normalization: lowercase, remove punctuation, strip whitespace
 
     Args:
         transcripts: Dictionary of provider_name: transcript_text
@@ -771,15 +788,29 @@ def calculate_wer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
     """
     wer_scores = {}
 
+    # Text normalization pipeline for fair comparison
+    # Remove punctuation, convert to lowercase, normalize whitespace
+    transformation = Compose([
+        ToLowerCase(),
+        RemovePunctuation(),
+        RemoveMultipleSpaces(),
+        Strip()
+    ])
+
     for provider, transcript in transcripts.items():
         try:
             if transcript and reference:
-                # Calculate WER
-                error_rate = wer(reference, transcript)
+                # Normalize both texts before comparison
+                normalized_ref = transformation(reference)
+                normalized_trans = transformation(transcript)
+
+                # Calculate WER on normalized text
+                error_rate = wer(normalized_ref, normalized_trans)
                 wer_scores[provider] = round(error_rate * 100, 2)  # Convert to percentage
             else:
                 wer_scores[provider] = None
         except Exception as e:
+            print(f"[ERROR] WER calculation for {provider}: {e}")
             wer_scores[provider] = None
 
     return wer_scores
@@ -788,6 +819,7 @@ def calculate_wer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
 def calculate_cer_scores(transcripts: Dict[str, str], reference: str) -> Dict[str, float]:
     """
     Calculate Character Error Rate (CER) for each transcript against the reference
+    Uses text normalization: lowercase, remove punctuation, strip whitespace
 
     Args:
         transcripts: Dictionary of provider_name: transcript_text
@@ -798,21 +830,28 @@ def calculate_cer_scores(transcripts: Dict[str, str], reference: str) -> Dict[st
     """
     cer_scores = {}
 
+    # Text normalization pipeline for fair comparison
+    transformation = Compose([
+        ToLowerCase(),
+        RemovePunctuation(),
+        RemoveMultipleSpaces(),
+        Strip()
+    ])
+
     for provider, transcript in transcripts.items():
         try:
             if transcript and reference:
-                # Calculate character-level Levenshtein distance
-                ref_chars = list(reference)
-                trans_chars = list(transcript)
+                # Normalize both texts before comparison
+                normalized_ref = transformation(reference)
+                normalized_trans = transformation(transcript)
 
-                # Simple CER calculation using character-level comparison
-                # Using jiwer with character mode
-                from jiwer import cer as calculate_cer
-                error_rate = calculate_cer(reference, transcript)
+                # Calculate CER on normalized text
+                error_rate = cer(normalized_ref, normalized_trans)
                 cer_scores[provider] = round(error_rate * 100, 2)  # Convert to percentage
             else:
                 cer_scores[provider] = None
         except Exception as e:
+            print(f"[ERROR] CER calculation for {provider}: {e}")
             cer_scores[provider] = None
 
     return cer_scores
